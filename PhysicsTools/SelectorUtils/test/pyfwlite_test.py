@@ -27,11 +27,6 @@ selectElectron = VIDElectronSelector(cutBasedElectronID_PHYS14_PU20bx25_V1_stand
 print 'Initialized VID Selector for Electrons'
 print selectElectron
 
-from PhysicsTools.SelectorUtils.trivialCutFlow_cff import trivialCutFlow
-testExprEval = VIDElectronSelector(trivialCutFlow)
-print 'test expression evaluator'
-print testExprEval
-
 #photon MVA (only works on reMiniAOD)
 print 'Initialized VID Photon MVA Selector'
 from RecoEgamma.PhotonIdentification.VIDPhotonSelector import VIDPhotonSelector
