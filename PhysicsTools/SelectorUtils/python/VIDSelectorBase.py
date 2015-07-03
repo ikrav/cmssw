@@ -40,6 +40,8 @@ class VIDSelectorBase:
         self.__selectorBuilder = vidSelectorBuilder()
         self.__instance = None
         if pythonpset is not None:
+            if hasattr(pythonpset,'isPOGApproved'):
+                del pythonpset.isPOGApproved
             self.__instance = process_pset( self.__selectorBuilder, pythonpset ) 
             self.__initialized = True
         else:
@@ -65,6 +67,8 @@ class VIDSelectorBase:
             print 'VID Selector is already initialized, doing nothing!'
             return
         del process.__instance
+        if hasattr(pythonpset,'isPOGApproved'):
+            del pythonpset.isPOGApproved
         self.__instance = process_pset( self.__selectorBuilder, pythonpset )         
         self.__initialized = True
 
