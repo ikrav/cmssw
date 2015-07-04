@@ -1,7 +1,7 @@
 #ifndef __DataFormats_PatCandidates_VIDResult_H__
 #define __DataFormats_PatCandidates_VIDResult_H__
 
-#include <unordered_map>
+#include <map>
 #include <vector>
 #include <string>
 
