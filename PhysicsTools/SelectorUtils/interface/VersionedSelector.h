@@ -110,6 +110,17 @@ class VersionedSelector : public Selector<T> {
   
   //repeat the other operator() we left out here
   //in the base class here so they are exposed to ROOT
+
+  /* VID BY VALUE */
+  bool operator()( typename T::value_type const & t ) {
+    const T temp(&t,0); // assuming T is edm::Ptr
+    return this->operator()(temp);
+  }
+
+  bool operator()( typename T::value_type const & t, edm::EventBase const & e) {
+    const T temp(&t,0);
+    return this->operator()(temp,e);
+  }
   
   virtual bool operator()( T const & t ) CINT_GUARD(override final) {
     this->retInternal_.set(false);
@@ -225,7 +236,7 @@ initialize( const edm::ParameterSet& conf ) {
 #include "DataFormats/PatCandidates/interface/VIDCutFlowResult.h"
 template<class T> 
 vid::CutFlowResult VersionedSelector<T>::cutFlowResult() const {
-  std::unordered_map<std::string,unsigned> names_to_index;
+  std::map<std::string,unsigned> names_to_index;
   std::map<std::string,unsigned> cut_counter;
   for( unsigned idx = 0; idx < cuts_.size(); ++idx ) {
     const std::string& name = cuts_[idx]->name();
@@ -235,7 +246,7 @@ vid::CutFlowResult VersionedSelector<T>::cutFlowResult() const {
     names_to_index.emplace(realname.str(),idx);
     cut_counter[name]++;
   }
-  return vid::CutFlowResult(name_,names_to_index,bitmap_,values_);
+  return vid::CutFlowResult(name_,md5_string_,names_to_index,values_,bitmap_);
 }
 
 #include "PhysicsTools/SelectorUtils/interface/CutApplicatorWithEventContentBase.h"
