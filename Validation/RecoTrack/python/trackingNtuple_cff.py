@@ -82,7 +82,14 @@ trackingPhase2PU140.toModify(trackingNtuple, seedTracks = _seedSelectors_trackin
 trackingNtuple.tracks = cms.untracked.InputTag('electronGsfTracks')
 
 # Matches to the original seeds defined in RecoTracker.IterativeTracking.ElectronSeeds_cff
-_seedProducersOriginal = _electron_cff._seedCollections_Phase1
+_seedProducersOriginal = ['initialStepSeeds',
+                          'highPtTripletStepSeeds',
+                          'mixedTripletStepSeeds',
+                          'pixelLessStepSeeds',
+                          'tripletElectronSeeds',
+                          'pixelPairElectronSeeds',
+                          'stripPairElectronSeeds']
+print 'I will use this original collection: ', _seedProducersOriginal
 (_seedSelectorsOriginal, trackingNtupleSeedSelectorsOriginal) = _TrackValidation_cff._addSeedToTrackProducers(_seedProducersOriginal, globals())
 trackingNtuple.seedTracksOriginal = _seedSelectorsOriginal
 
