@@ -591,7 +591,9 @@ private:
   std::vector<unsigned int> trk_stopReason;
   std::vector<short> trk_isHP    ;
   std::vector<int> trk_seedIdx ;
-  std::vector<int> trk_vtxIdx;
+  std::vector<float> trk_vtxx;
+  std::vector<float> trk_vtxy;
+  std::vector<float> trk_vtxz;
   std::vector<std::vector<float> > trk_shareFrac; // second index runs through matched TrackingParticles
   std::vector<std::vector<int> > trk_simTrkIdx;   // second index runs through matched TrackingParticles
   std::vector<std::vector<int> > trk_hitIdx;      // second index runs through hits
@@ -966,7 +968,9 @@ TrackingNtuple::TrackingNtuple(const edm::ParameterSet& iConfig):
   if(includeSeeds_) {
     t->Branch("trk_seedIdx"  , &trk_seedIdx );
   }
-  t->Branch("trk_vtxIdx"   , &trk_vtxIdx);
+  t->Branch("trk_vtxx"   , &trk_vtxx);
+  t->Branch("trk_vtxy"   , &trk_vtxy);
+  t->Branch("trk_vtxz"   , &trk_vtxz);
   t->Branch("trk_shareFrac", &trk_shareFrac);
   t->Branch("trk_simTrkIdx", &trk_simTrkIdx  );
   if(includeAllHits_) {
@@ -1333,7 +1337,9 @@ void TrackingNtuple::clearVariables() {
   trk_stopReason.clear();
   trk_isHP     .clear();
   trk_seedIdx  .clear();
-  trk_vtxIdx   .clear();
+  trk_vtxx   .clear();
+  trk_vtxy   .clear();
+  trk_vtxz   .clear();
   trk_shareFrac.clear();
   trk_simTrkIdx.clear();
   trk_hitIdx   .clear();
@@ -1687,18 +1693,6 @@ void TrackingNtuple::analyze(const edm::Event& iEvent, const edm::EventSetup& iS
   BeamSpot const & bs = *recoBeamSpotHandle;
   fillBeamSpot(bs);
 
-  // Supercluster
-  edm::Handle<reco::SuperClusterCollection> scHandleEB;
-  iEvent.getByToken(superClusterTokenEB_, scHandleEB);
-  edm::Handle<reco::SuperClusterCollection> scHandleEE;
-  iEvent.getByToken(superClusterTokenEE_, scHandleEE);
-  SuperClusterKeyToIndex scKeyToIndexEB;
-  SuperClusterKeyToIndex scKeyToIndexEE;
-  for (size_t i=0; i<scHandleEB->size(); i++) 
-    scKeyToIndexEB[edm::Ref<reco::SuperClusterCollection>(scHandleEB, i).key()] = i;
-  for (size_t i=0; i<scHandleEE->size(); i++) 
-    scKeyToIndexEE[edm::Ref<reco::SuperClusterCollection>(scHandleEE, i).key()] = i;
-
   //prapare list to link matched hits to collection
   vector<pair<int,int> > monoStereoClusterList;
   if(includeAllHits_) {
@@ -1728,8 +1722,18 @@ void TrackingNtuple::analyze(const edm::Event& iEvent, const edm::EventSetup& iS
 
   //seeds
   if(includeSeeds_) {
-    fillSeeds(iEvent, tpCollection, tpKeyToIndex, bs, associatorByHits, *theTTRHBuilder, theMF.product(), monoStereoClusterList, hitProductIds, seedCollToOffset, scKeyToIndexEB, scKeyToIndexEE);
+    edm::Handle<reco::SuperClusterCollection> scHandleEB;
+    iEvent.getByToken(superClusterTokenEB_, scHandleEB);
+    edm::Handle<reco::SuperClusterCollection> scHandleEE;
+    iEvent.getByToken(superClusterTokenEE_, scHandleEE);
+    SuperClusterKeyToIndex scKeyToIndexEB;
+    SuperClusterKeyToIndex scKeyToIndexEE;
+    for (size_t i=0; i<scHandleEB->size(); i++) 
+      scKeyToIndexEB[edm::Ref<reco::SuperClusterCollection>(scHandleEB, i).key()] = i;
+    for (size_t i=0; i<scHandleEE->size(); i++) 
+      scKeyToIndexEE[edm::Ref<reco::SuperClusterCollection>(scHandleEE, i).key()] = i;
 
+    fillSeeds(iEvent, tpCollection, tpKeyToIndex, bs, associatorByHits, *theTTRHBuilder, theMF.product(), monoStereoClusterList, hitProductIds, seedCollToOffset, scKeyToIndexEB, scKeyToIndexEE);
     // superClusters ... it needs to be here, inside
     fillSuperClusters(iEvent, *scHandleEB, *scHandleEE, bs, theMF.product(), tTopo);
   }
@@ -1749,12 +1753,16 @@ void TrackingNtuple::analyze(const edm::Event& iEvent, const edm::EventSetup& iS
   for(edm::View<Track>::size_type i=0; i<tracks.size(); ++i) {
     trackRefs.push_back(tracks.refAt(i));
   }
+
   fillTracks(trackRefs, tpCollection, tpKeyToIndex, bs, theMF.product(), associatorByHits, *theTTRHBuilder, tTopo, hitProductIds, seedCollToOffset, genParticles);
 
   //tracking particles
   //sort association maps with simHits
   std::sort( tpHitList.begin(), tpHitList.end(), tpHitIndexListLessSort );
   fillTrackingParticles(iEvent, iSetup, trackRefs, tpCollection, tvKeyToIndex, associatorByHits, tpHitList);
+
+  // tracking vertices
+  fillTrackingVertices(tvRefs, tpKeyToIndex);
 
   // vertices
   edm::Handle<reco::VertexCollection> vertices;
@@ -2406,41 +2414,41 @@ void TrackingNtuple::fillSeeds(const edm::Event& iEvent,
 
       
       if (!electronSeed.caloCluster().isNull()) {
-	auto seedCluster = electronSeed.caloCluster();
-	auto sclKey = seedCluster.key();
-	int sclIdx = -1;
-	if (seedCluster->caloID().detector() == reco::CaloID::DET_ECAL_BARREL) {
-	  auto found = scKeyToIndexEB.find(sclKey);
-	  if(found == scKeyToIndexEB.end())
-	    continue;
-	  else
-	    sclIdx = found->second;
-	} else if (seedCluster->caloID().detector() == reco::CaloID::DET_ECAL_ENDCAP) {
-	  auto found = scKeyToIndexEE.find(sclKey);
-	  if(found == scKeyToIndexEE.end())
-	    continue;
-	  else
-	    sclIdx = found->second;
-	}
-	see_superClusterIdx.push_back(sclIdx);
-	see_superClusterEnergy.push_back(seedCluster->energy());
-	see_superClusterEta.push_back(seedCluster->position().eta());
-	see_superClusterPhi.push_back(seedCluster->position().phi());
-	see_superClusterEt.push_back(seedCluster->energy()*seedCluster->position().rho()/seedCluster->position().r());
-	see_ecalDriven.push_back(1);
+      	auto seedCluster = electronSeed.caloCluster();
+      	auto sclKey = seedCluster.key();
+      	int sclIdx = -1;
+      	if (seedCluster->caloID().detector() == reco::CaloID::DET_ECAL_BARREL) {
+      	  auto found = scKeyToIndexEB.find(sclKey);
+      	  if(found == scKeyToIndexEB.end())
+      	    continue;
+      	  else
+      	    sclIdx = found->second;
+      	} else if (seedCluster->caloID().detector() == reco::CaloID::DET_ECAL_ENDCAP) {
+      	  auto found = scKeyToIndexEE.find(sclKey);
+      	  if(found == scKeyToIndexEE.end())
+      	    continue;
+      	  else
+      	    sclIdx = found->second;
+      	}
+      	see_superClusterIdx.push_back(sclIdx);
+      	see_superClusterEnergy.push_back(seedCluster->energy());
+      	see_superClusterEta.push_back(seedCluster->position().eta());
+      	see_superClusterPhi.push_back(seedCluster->position().phi());
+      	see_superClusterEt.push_back(seedCluster->energy()*seedCluster->position().rho()/seedCluster->position().r());
+      	see_ecalDriven.push_back(1);
       } else {
-	see_superClusterIdx.push_back(-999);
-	see_superClusterEnergy.push_back(-999.);
-	see_superClusterEta.push_back(-999.);
-	see_superClusterPhi.push_back(-999.);
-	see_superClusterEt.push_back(-999.);
-	see_ecalDriven.push_back(0);
+      	see_superClusterIdx.push_back(-999);
+      	see_superClusterEnergy.push_back(-999.);
+      	see_superClusterEta.push_back(-999.);
+      	see_superClusterPhi.push_back(-999.);
+      	see_superClusterEt.push_back(-999.);
+      	see_ecalDriven.push_back(0);
       }
 
       if (electronSeed.ctfTrack().isNull())
-	see_trkDriven.push_back(0);
+      	see_trkDriven.push_back(0);
       else
-	see_trkDriven.push_back(1);
+      	see_trkDriven.push_back(1);
 
       /// Hmm, the following could make sense instead of plain failing if propagation to beam line fails
       /*
@@ -2722,7 +2730,9 @@ void TrackingNtuple::fillTracks(const edm::RefToBaseVector<reco::Track>& tracks,
       //      }
       see_trkIdx[seedIndex] = iTrack;
     }
-    trk_vtxIdx   .push_back(-1); // to be set correctly in fillVertices
+    trk_vtxx   .push_back(itTrack->referencePoint().x()); // to be set correctly in fillVertices
+    trk_vtxy   .push_back(itTrack->referencePoint().y()); // to be set correctly in fillVertices
+    trk_vtxz   .push_back(itTrack->referencePoint().z()); // to be set correctly in fillVertices
     trk_simTrkIdx.push_back(tpIdx);
     LogTrace("TrackingNtuple") << "Track #" << itTrack.key() << " with q=" << charge
                                << ", pT=" << pt << " GeV, eta: " << eta << ", phi: " << phi
@@ -2935,6 +2945,7 @@ void TrackingNtuple::fillVertices(const reco::VertexCollection& vertices,
     vtx_fake.push_back(vertex.isFake());
     vtx_valid.push_back(vertex.isValid());
 
+    /*
     std::vector<int> trkIdx;
     for(auto iTrack = vertex.tracks_begin(); iTrack != vertex.tracks_end(); ++iTrack) {
       // Ignore link if vertex was fit from a track collection different from the input
@@ -2942,13 +2953,14 @@ void TrackingNtuple::fillVertices(const reco::VertexCollection& vertices,
         continue;
 
       trkIdx.push_back(iTrack->key());
-
+    
       //      if(trk_vtxIdx[iTrack->key()] != -1) {
       //        throw cms::Exception("LogicError") << "Vertex index has already been set for track " << iTrack->key() << " to " << trk_vtxIdx[iTrack->key()] << "; was trying to set it to " << iVertex;
       //      }
-      trk_vtxIdx[iTrack->key()] = iVertex;
+      //      trk_vtxIdx[iTrack->key()] = iVertex;
     }
     vtx_trkIdx.push_back(trkIdx);
+    */
   }
 }
 

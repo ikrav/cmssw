@@ -22,7 +22,7 @@ def customiseTrackingNtuple(process):
     usePileupSimHits = hasattr(process, "mix") and hasattr(process.mix, "input") and len(process.mix.input.fileNames) > 0
 #    process.eda = cms.EDAnalyzer("EventContentAnalyzer")
 
-    ntuplePath = cms.EndPath(process.trackingNtupleSequence)
+    ntuplePath = cms.Path(process.trackingNtupleSequence)
     if process.trackingNtuple.includeAllHits and usePileupSimHits:
         ntuplePath.insert(0, cms.SequencePlaceholder("mix"))
 
