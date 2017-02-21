@@ -54,7 +54,6 @@ def _filterForNtuple(lst):
             continue
         ret.append(item)
     return ret
-<<<<<<< HEAD
 # The line below is commented out because it is replaced by the electron-specific line below
 # _seedProducers = _filterForNtuple(_TrackValidation_cff._seedProducers)
 
@@ -89,10 +88,10 @@ _seedProducersOriginal = ['initialStepSeeds',
                           'tripletElectronSeeds',
                           'pixelPairElectronSeeds',
                           'stripPairElectronSeeds']
-print 'I will use this original collection: ', _seedProducersOriginal
 (_seedSelectorsOriginal, trackingNtupleSeedSelectorsOriginal) = _TrackValidation_cff._addSeedToTrackProducers(_seedProducersOriginal, globals())
 trackingNtuple.seedTracksOriginal = _seedSelectorsOriginal
-
+trackingNtuple.barrelSuperClusters = cms.untracked.InputTag("particleFlowSuperClusterECAL:particleFlowSuperClusterECALBarrel")
+trackingNtuple.endcapSuperClusters = cms.untracked.InputTag("particleFlowSuperClusterECAL:particleFlowSuperClusterECALEndcapWithPreshower")
 trackingNtupleSequence = cms.Sequence()
 
 # reproduce hits because they're not stored in RECO
@@ -109,6 +108,8 @@ if _includeHits:
 if _includeSeeds:
     trackingNtupleSequence += trackingNtupleSeedSelectors
     trackingNtupleSequence += trackingNtupleSeedSelectorsOriginal
+
+print 'Configuration for Ntuple finished'
 
 trackingNtupleSequence += (
     # sim information

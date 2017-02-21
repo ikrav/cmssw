@@ -32,6 +32,10 @@
 <use   name="DataFormats/VertexReco"/>
 <use   name="DataFormats/EgammaReco"/>
 <use   name="TrackingTools/PatternTools"/>
+<use   name="TrackingTools/MaterialEffects"/>
+<use   name="RecoEgamma/EgammaElectronAlgos"/>
+<use   name="DataFormats/CaloRecHit"/>
+<use   name="DataFormats/GeometryCommonDetAlgo"/>
 <lib   name="MathMore"/>
 <library   file="*.cc" name="ValidationRecoTrackPlugins">
   <flags   EDM_PLUGIN="1"/>

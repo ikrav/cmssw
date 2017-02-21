@@ -17,6 +17,10 @@
 //
 
 
+/// To do: save relative positions of pixel hits and superclusters like in pixel hits
+///        link seeds to superclusters - DONE!!!
+
+
 // system include files
 #include <memory>
 
@@ -82,11 +86,20 @@
 
 #include "Validation/RecoTrack/interface/trackFromSeedFitFailed.h"
 
-// RCLSA
+
+// SuperCluster : added for electron studies
 #include "DataFormats/Math/interface/deltaPhi.h"
 #include "DataFormats/HepMCCandidate/interface/GenParticle.h"
 #include "DataFormats/HepMCCandidate/interface/GenParticleFwd.h"
 #include "TrackingTools/PatternTools/interface/trackingParametersAtClosestApproachToBeamSpot.h"
+#include "DataFormats/EgammaReco/interface/SuperCluster.h"
+#include "DataFormats/EgammaReco/interface/SuperClusterFwd.h"
+#include "TrackingTools/MaterialEffects/interface/PropagatorWithMaterial.h"
+#include "DataFormats/CaloRecHit/interface/CaloID.h"
+#include "RecoEgamma/EgammaElectronAlgos/interface/PixelMatchStartLayers.h"
+#include "RecoEgamma/EgammaElectronAlgos/interface/FTSFromVertexToPointFactory.h"
+#include "RecoEgamma/EgammaElectronAlgos/interface/ElectronUtilities.h"
+#include "DataFormats/GeometryCommonDetAlgo/interface/PerpendicularBoundPlaneBuilder.h"
 
 #include <set>
 #include <map>
@@ -307,6 +320,8 @@ private:
   typedef TrackingParticleRefKeyToIndex TrackingVertexRefKeyToIndex;
   typedef std::pair<TrackPSimHitRef::key_type, edm::ProductID> SimHitFullKey;
   typedef std::map<SimHitFullKey, size_t> SimHitRefKeyToIndex;
+  //Supercluster
+  typedef std::map<reco::SuperClusterRef::key_type, size_t> SuperClusterKeyToIndex;
 
   enum class HitType {
     Pixel = 0,
@@ -396,7 +411,10 @@ private:
                  const MagneticField *theMF,
                  const std::vector<std::pair<int, int> >& monoStereoClusterList,
                  const std::set<edm::ProductID>& hitProductIds,
-                 std::map<edm::ProductID, size_t>& seedToCollIndex
+                 std::map<edm::ProductID, size_t>& seedToCollIndex,
+		 // supercluster
+		 const SuperClusterKeyToIndex& scKeyToIndexEB,
+		 const SuperClusterKeyToIndex& scKeyToIndexEE
                  );
 
   void fillGenParticles(const reco::GenParticleCollection& genParticles);
@@ -436,6 +454,15 @@ private:
                             const TrackingParticleRefKeyToIndex& tpKeyToIndex
                             );
 
+
+  // supercluster
+  void fillSuperClusters(const edm::Event& iEvent,
+			 const reco::SuperClusterCollection& scCollEB,
+			 const reco::SuperClusterCollection& scCollEE,
+			 const reco::BeamSpot& bs,
+			 const MagneticField *theMF,
+			 const TrackerTopology& tTopo
+			 );
 
 
   struct SimHitData {
@@ -488,6 +515,9 @@ private:
   const bool includeAllHits_;
 
   edm::EDGetTokenT<reco::GenParticleCollection> genParticlesToken_;
+  // SuperClusters
+  edm::EDGetTokenT<reco::SuperClusterCollection> superClusterTokenEB_;
+  edm::EDGetTokenT<reco::SuperClusterCollection> superClusterTokenEE_;
 
   TTree* t;
   // event
@@ -761,10 +791,11 @@ private:
   std::vector<float> see_dPhi1Pos;
   std::vector<float> see_hoe1;
   std::vector<float> see_hoe2;
-  std::vector<float> see_superclusterEnergy;
-  std::vector<float> see_superclusterEta;
-  std::vector<float> see_superclusterPhi;
-  std::vector<float> see_superclusterEt;
+  std::vector<float> see_superClusterEnergy;
+  std::vector<float> see_superClusterEta;
+  std::vector<float> see_superClusterPhi;
+  std::vector<float> see_superClusterEt;
+  std::vector<int>   see_superClusterIdx;
   std::vector<unsigned int> see_ecalDriven;
   std::vector<unsigned int> see_trkDriven;  
   //seed algo offset, index runs through iterations
@@ -798,6 +829,31 @@ private:
   std::vector<std::vector<int> > simvtx_sourceSimIdx;   // second index runs through source TrackingParticles
   std::vector<std::vector<int> > simvtx_daughterSimIdx; // second index runs through daughter TrackingParticles
   std::vector<int> simpv_idx;
+
+
+  /////////////////////
+  // Super cluster
+  // first index runs through SuperClusters
+  // second index runs through pixel hits in [-1,1] x [-1,1] window
+  std::vector<float> scl_e;
+  std::vector<float> scl_px;
+  std::vector<float> scl_py;
+  std::vector<float> scl_pz;
+  std::vector<float> scl_x;
+  std::vector<float> scl_y;
+  std::vector<float> scl_z;
+  std::vector<std::vector<int> >  scl_charge;
+  std::vector<std::vector<int> >   scl_lay1;  
+  std::vector<std::vector<int> >   scl_lay2;  
+  std::vector<std::vector<int> >   scl_subDet1;
+  std::vector<std::vector<int> >   scl_subDet2;
+  std::vector<std::vector<float> > scl_dRz1;
+  std::vector<std::vector<float> > scl_dPhi1;
+  std::vector<std::vector<float> > scl_dRz2;
+  std::vector<std::vector<float> > scl_dPhi2;
+  std::vector<std::vector<int> > scl_seedType;
+  std::vector<std::vector<unsigned char> > scl_hitsMask;
+  
 };
 
 //
@@ -834,7 +890,11 @@ TrackingNtuple::TrackingNtuple(const edm::ParameterSet& iConfig):
   parametersDefinerName_(iConfig.getUntrackedParameter<std::string>("parametersDefiner")),
   includeSeeds_(iConfig.getUntrackedParameter<bool>("includeSeeds")),
   includeAllHits_(iConfig.getUntrackedParameter<bool>("includeAllHits")),
-  genParticlesToken_(consumes<reco::GenParticleCollection>(iConfig.getUntrackedParameter<edm::InputTag>("genParticles")))
+  genParticlesToken_(consumes<reco::GenParticleCollection>(iConfig.getUntrackedParameter<edm::InputTag>("genParticles"))),
+  // SuperCluster
+  superClusterTokenEB_(consumes<reco::SuperClusterCollection>(iConfig.getUntrackedParameter<edm::InputTag>("barrelSuperClusters"))),
+  superClusterTokenEE_(consumes<reco::SuperClusterCollection>(iConfig.getUntrackedParameter<edm::InputTag>("endcapSuperClusters")))
+
 {
   const bool tpRef = iConfig.getUntrackedParameter<bool>("trackingParticlesRef");
   const auto tpTag = iConfig.getUntrackedParameter<edm::InputTag>("trackingParticles");
@@ -1112,10 +1172,11 @@ TrackingNtuple::TrackingNtuple(const edm::ParameterSet& iConfig):
     t->Branch("see_dPhi1Pos", &see_dPhi1Pos);
     t->Branch("see_hoe1", &see_hoe1);
     t->Branch("see_hoe2", &see_hoe2);
-    t->Branch("see_superclusterEnergy", &see_superclusterEnergy);
-    t->Branch("see_superclusterEta", &see_superclusterEta);
-    t->Branch("see_superclusterPhi", &see_superclusterPhi);
-    t->Branch("see_superclusterEt", &see_superclusterEt);
+    t->Branch("see_superClusterEnergy", &see_superClusterEnergy);
+    t->Branch("see_superClusterEta", &see_superClusterEta);
+    t->Branch("see_superClusterPhi", &see_superClusterPhi);
+    t->Branch("see_superClusterEt", &see_superClusterEt);
+    t->Branch("see_superClusterIdx", &see_superClusterIdx);
     t->Branch("see_ecalDriven", &see_ecalDriven);
     t->Branch("see_trkDriven", &see_trkDriven);
 
@@ -1157,6 +1218,26 @@ TrackingNtuple::TrackingNtuple(const edm::ParameterSet& iConfig):
 
   t->Branch("simpv_idx"      , &simpv_idx);
 
+
+  t->Branch("scl_e", &scl_e);
+  t->Branch("scl_px", &scl_px);
+  t->Branch("scl_py", &scl_py);
+  t->Branch("scl_pz", &scl_pz);
+  t->Branch("scl_x", &scl_x);
+  t->Branch("scl_y", &scl_y);
+  t->Branch("scl_z", &scl_z);
+  t->Branch("scl_charge", &scl_charge);
+  t->Branch("scl_lay1", &scl_lay1);
+  t->Branch("scl_lay2", &scl_lay2);
+  t->Branch("scl_subDet1", &scl_subDet1);
+  t->Branch("scl_subDet2", &scl_subDet2);
+  t->Branch("scl_dRz1", &scl_dRz1);
+  t->Branch("scl_dPhi1", &scl_dPhi1);
+  t->Branch("scl_dRz2", &scl_dRz2);
+  t->Branch("scl_dPhi2", &scl_dPhi2);
+  t->Branch("scl_seedType", &scl_seedType);
+  t->Branch("scl_hitsMask", &scl_hitsMask);
+
   //t->Branch("" , &);
 }
 
@@ -1175,6 +1256,26 @@ void TrackingNtuple::clearVariables() {
   ev_run = 0;
   ev_lumi = 0;
   ev_event = 0;
+
+  //scl
+  scl_e.clear();
+  scl_px.clear();
+  scl_py.clear();
+  scl_pz.clear();
+  scl_x.clear();
+  scl_y.clear();
+  scl_z.clear();
+  scl_charge.clear();
+  scl_lay1.clear();  
+  scl_lay2.clear();  
+  scl_subDet1.clear();
+  scl_subDet2.clear();
+  scl_dRz1.clear();
+  scl_dPhi1.clear();
+  scl_dRz2.clear();
+  scl_dPhi2.clear();
+  scl_seedType.clear();
+  scl_hitsMask.clear();
 
   //tracks
   trk_px       .clear();
@@ -1380,10 +1481,11 @@ void TrackingNtuple::clearVariables() {
   see_dPhi1Pos.clear();
   see_hoe1.clear();
   see_hoe2.clear();
-  see_superclusterEnergy.clear();
-  see_superclusterEta.clear();
-  see_superclusterPhi.clear();
-  see_superclusterEt.clear();
+  see_superClusterEnergy.clear();
+  see_superClusterEta.clear();
+  see_superClusterPhi.clear();
+  see_superClusterEt.clear();
+  see_superClusterIdx.clear();
   see_ecalDriven.clear();
   see_trkDriven.clear();
   see_fitok   .clear();
@@ -1569,6 +1671,17 @@ void TrackingNtuple::analyze(const edm::Event& iEvent, const edm::EventSetup& iS
   BeamSpot const & bs = *recoBeamSpotHandle;
   fillBeamSpot(bs);
 
+  // Supercluster
+  edm::Handle<reco::SuperClusterCollection> scHandleEB;
+  iEvent.getByToken(superClusterTokenEB_, scHandleEB);
+  edm::Handle<reco::SuperClusterCollection> scHandleEE;
+  iEvent.getByToken(superClusterTokenEE_, scHandleEE);
+  SuperClusterKeyToIndex scKeyToIndexEB;
+  SuperClusterKeyToIndex scKeyToIndexEE;
+  for (size_t i=0; i<scHandleEB->size(); i++) 
+    scKeyToIndexEB[edm::Ref<reco::SuperClusterCollection>(scHandleEB, i).key()] = i;
+  for (size_t i=0; i<scHandleEE->size(); i++) 
+    scKeyToIndexEE[edm::Ref<reco::SuperClusterCollection>(scHandleEE, i).key()] = i;
 
   //prapare list to link matched hits to collection
   vector<pair<int,int> > monoStereoClusterList;
@@ -1594,11 +1707,15 @@ void TrackingNtuple::analyze(const edm::Event& iEvent, const edm::EventSetup& iS
       const auto& phase2OTSimLinks = *siphase2OTSimLinksHandle;
       fillPhase2OTHits(iEvent, clusterToTPMap, tpKeyToIndex, *simHitsTPAssoc, phase2OTSimLinks, *theTTRHBuilder, tTopo, simHitRefKeyToIndex, hitProductIds);
     }
+
   }
 
   //seeds
   if(includeSeeds_) {
-    fillSeeds(iEvent, tpCollection, tpKeyToIndex, bs, associatorByHits, *theTTRHBuilder, theMF.product(), monoStereoClusterList, hitProductIds, seedCollToOffset);
+    fillSeeds(iEvent, tpCollection, tpKeyToIndex, bs, associatorByHits, *theTTRHBuilder, theMF.product(), monoStereoClusterList, hitProductIds, seedCollToOffset, scKeyToIndexEB, scKeyToIndexEE);
+
+    // superClusters ... it needs to be here, inside
+    fillSuperClusters(iEvent, *scHandleEB, *scHandleEE, bs, theMF.product(), tTopo);
   }
 
   //tracks
@@ -2131,7 +2248,9 @@ void TrackingNtuple::fillSeeds(const edm::Event& iEvent,
                                const MagneticField *theMF,
                                const std::vector<std::pair<int, int> >& monoStereoClusterList,
                                const std::set<edm::ProductID>& hitProductIds,
-                               std::map<edm::ProductID, size_t>& seedCollToOffset
+                               std::map<edm::ProductID, size_t>& seedCollToOffset,
+			       const SuperClusterKeyToIndex& scKeyToIndexEB,
+			       const SuperClusterKeyToIndex& scKeyToIndexEE
                                ) {
   TSCBLBuilderNoMaterial tscblBuilder;
   
@@ -2272,21 +2391,35 @@ void TrackingNtuple::fillSeeds(const edm::Event& iEvent,
       
       if (!electronSeed.caloCluster().isNull()) {
 	auto seedCluster = electronSeed.caloCluster();
-	see_superclusterEnergy.push_back(seedCluster->energy());
-	see_superclusterEta.push_back(seedCluster->position().eta());
-	see_superclusterPhi.push_back(seedCluster->position().phi());
-	see_superclusterEt.push_back(seedCluster->energy()*seedCluster->position().rho()/seedCluster->position().r());
-      } else {
-	see_superclusterEnergy.push_back(-999.);
-	see_superclusterEta.push_back(-999.);
-	see_superclusterPhi.push_back(-999.);
-	see_superclusterEt.push_back(-999.);
-      }
-
-      if (electronSeed.caloCluster().isNull())
-	see_ecalDriven.push_back(0);
-      else
+	auto sclKey = seedCluster.key();
+	int sclIdx = -1;
+	if (seedCluster->caloID().detector() == reco::CaloID::DET_ECAL_BARREL) {
+	  auto found = scKeyToIndexEB.find(sclKey);
+	  if(found == scKeyToIndexEB.end())
+	    continue;
+	  else
+	    sclIdx = found->second;
+	} else if (seedCluster->caloID().detector() == reco::CaloID::DET_ECAL_ENDCAP) {
+	  auto found = scKeyToIndexEE.find(sclKey);
+	  if(found == scKeyToIndexEE.end())
+	    continue;
+	  else
+	    sclIdx = found->second;
+	}
+	see_superClusterIdx.push_back(sclIdx);
+	see_superClusterEnergy.push_back(seedCluster->energy());
+	see_superClusterEta.push_back(seedCluster->position().eta());
+	see_superClusterPhi.push_back(seedCluster->position().phi());
+	see_superClusterEt.push_back(seedCluster->energy()*seedCluster->position().rho()/seedCluster->position().r());
 	see_ecalDriven.push_back(1);
+      } else {
+	see_superClusterIdx.push_back(-999);
+	see_superClusterEnergy.push_back(-999.);
+	see_superClusterEta.push_back(-999.);
+	see_superClusterPhi.push_back(-999.);
+	see_superClusterEt.push_back(-999.);
+	see_ecalDriven.push_back(0);
+      }
 
       if (electronSeed.ctfTrack().isNull())
 	see_trkDriven.push_back(0);
@@ -2792,9 +2925,9 @@ void TrackingNtuple::fillVertices(const reco::VertexCollection& vertices,
 
       trkIdx.push_back(iTrack->key());
 
-      if(trk_vtxIdx[iTrack->key()] != -1) {
-        throw cms::Exception("LogicError") << "Vertex index has already been set for track " << iTrack->key() << " to " << trk_vtxIdx[iTrack->key()] << "; was trying to set it to " << iVertex;
-      }
+      //      if(trk_vtxIdx[iTrack->key()] != -1) {
+      //        throw cms::Exception("LogicError") << "Vertex index has already been set for track " << iTrack->key() << " to " << trk_vtxIdx[iTrack->key()] << "; was trying to set it to " << iVertex;
+      //      }
       trk_vtxIdx[iTrack->key()] = iVertex;
     }
     vtx_trkIdx.push_back(trkIdx);
@@ -2865,6 +2998,160 @@ void TrackingNtuple::fillTrackingVertices(const TrackingVertexRefVector& trackin
   }
 }
 
+void TrackingNtuple::fillSuperClusters(const edm::Event& iEvent,
+				       const reco::SuperClusterCollection& scCollEB,
+				       const reco::SuperClusterCollection& scCollEE,
+				       const reco::BeamSpot& bs,
+				       const MagneticField *theMF,
+				       const TrackerTopology& tTopo) {
+
+  float mass=.000511; // electron propagation
+  PropagatorWithMaterial* prop1stLayer = new PropagatorWithMaterial(oppositeToMomentum,mass,&(*theMF));
+  PropagatorWithMaterial* prop2ndLayer = new PropagatorWithMaterial(alongMomentum,mass,&(*theMF));
+
+  std::vector<reco::SuperCluster> clusters_;
+  clusters_.reserve(scCollEB.size() + scCollEE.size());
+  clusters_.insert(clusters_.end(),scCollEB.begin(),scCollEB.end());
+  clusters_.insert(clusters_.end(),scCollEE.begin(),scCollEE.end());
+  for (auto&& theClus : clusters_) {
+    GlobalPoint xmeas(theClus.position().x(),theClus.position().y(),theClus.position().z());
+    GlobalPoint vprim(bs.position().x(),bs.position().y(),bs.position().z());
+    float energy = theClus.energy();
+          
+    scl_e.push_back(energy);
+    scl_px.push_back(energy*cos(theClus.position().phi())/cosh(theClus.position().eta()));
+    scl_py.push_back(energy*sin(theClus.position().phi())/cosh(theClus.position().eta()));
+    scl_pz.push_back(energy*tanh(theClus.position().eta()));
+    scl_x.push_back(bs.position().x());
+    scl_y.push_back(bs.position().y());
+    scl_z.push_back(bs.position().z());
+
+    std::vector<int>   scl_charge_;
+    std::vector<int>   scl_lay1_;
+    std::vector<int>   scl_lay2_;
+    std::vector<int>   scl_subDet1_;
+    std::vector<int>   scl_subDet2_;
+    std::vector<float> scl_dRz1_;
+    std::vector<float> scl_dPhi1_;
+    std::vector<float> scl_dRz2_;
+    std::vector<float> scl_dPhi2_;
+    std::vector<int>   scl_seedType_;
+    std::vector<unsigned char> scl_hitsMask_;
+
+    for (int charge=-1; charge<2; charge+=2) {
+
+      FreeTrajectoryState fts = FTSFromVertexToPointFactory::get(*theMF, xmeas, vprim, energy, charge);
+      PerpendicularBoundPlaneBuilder bpb;
+      TrajectoryStateOnSurface tsos(fts, *bpb(fts.position(), fts.momentum()));
+
+      int seedType = -1;
+      for(const auto& seedToken: seedTokensOriginal_) {
+	seedType++;
+	edm::Handle<edm::View<reco::Track> > seedTracksHandle;
+	iEvent.getByToken(seedToken, seedTracksHandle);
+	const auto& seedTracks = *seedTracksHandle;
+
+	for(const auto& seedTrack: seedTracks) {
+	  const auto& seedRef = seedTrack.seedRef();
+	  const auto& seed = *seedRef;
+	  
+	  const TrajectorySeed::range& hits = seed.recHits();
+	  for( auto it1 = hits.first; it1 < hits.second-1; ++it1 ) {
+	    if( !it1->isValid() ) continue;
+	    auto  idx1 = std::distance(hits.first,it1);
+	    const DetId id1 = it1->geographicalId();
+	    const GeomDet *geomdet1 = it1->det();	 
+	    const GlobalPoint& hit1Pos = it1->globalPosition();
+	    auto dt = hit1Pos.x()*xmeas.x()+hit1Pos.y()*xmeas.y();
+	    if (dt<0) continue;
+
+	    auto tsos1 = prop1stLayer->propagate(tsos,geomdet1->surface());
+	    if( !tsos1.isValid() ) continue;	  
+	    EleRelPointPair pp1(hit1Pos,tsos1.globalParameters().position(),vprim);
+	    const math::XYZPoint relHit1Pos(hit1Pos-vprim), relTSOSPos(tsos1.globalParameters().position() - vprim);
+	    const int subDet1 = id1.subdetId();
+	    const float dRz1 = ( id1.subdetId()%2 ? pp1.dZ() : pp1.dPerp() );
+	    const float dPhi1 = pp1.dPhi();
+	    if (std::abs(dRz1) > 0.5 || std::abs(dPhi1) > 0.5) continue;
+	    // we don't know the z vertex position, get it from linear extrapolation
+	    // compute the z vertex from the cluster point and the found pixel hit
+	    const double pxHit1z = hit1Pos.z();
+	    const double pxHit1x = hit1Pos.x();
+	    const double pxHit1y = hit1Pos.y();
+	    const double r1diff = std::sqrt( (pxHit1x-vprim.x())*(pxHit1x-vprim.x()) + 
+					     (pxHit1y-vprim.y())*(pxHit1y-vprim.y())   );
+	    const double r2diff = std::sqrt( (xmeas.x()-pxHit1x)*(xmeas.x()-pxHit1x) + 
+					     (xmeas.y()-pxHit1y)*(xmeas.y()-pxHit1y)   );
+	    double zVertex = pxHit1z - r1diff*(xmeas.z()-pxHit1z)/r2diff;		
+	    if (std::abs(zVertex) > 15.) continue;
+
+	    //store first hit
+	    scl_lay1_.push_back(tTopo.layer(id1));
+	    scl_subDet1_.push_back(subDet1);
+	    scl_dRz1_.push_back(dRz1);
+	    scl_dPhi1_.push_back(dPhi1);
+	    scl_seedType_.push_back(seedType);
+	    scl_charge_.push_back(charge);
+	    GlobalPoint vertex(vprim.x(),vprim.y(),zVertex);
+	    float min_dist = 99999999;
+	    float min_dRz2 = -999.;
+	    float min_dPhi2 = -999.;
+	    int min_subDet2 = -999;
+	    int min_lay2 = -999;
+	    unsigned char min_hitsMask = 0;
+	    for( auto it2 = it1+1; it2 != hits.second; ++it2 ) {
+
+	      if( !it2->isValid() ) continue;
+	      auto idx2 = std::distance(hits.first,it2);
+	      const DetId id2 = it2->geographicalId();
+	      const GeomDet *geomdet2 = it2->det();
+
+	      FreeTrajectoryState fts2 = FTSFromVertexToPointFactory::get(*theMF, hit1Pos, vertex, energy, charge) ;
+	      const GlobalPoint& hit2Pos = it2->globalPosition();;
+	      auto tsos2 = prop2ndLayer->propagate(fts2,geomdet2->surface());
+	      if ( !tsos2.isValid() ) continue;
+	      EleRelPointPair pp2(hit2Pos,tsos2.globalParameters().position(),vertex) ;
+	      const int subDet2 = id2.subdetId();
+	      const float dRz2 = (subDet2%2==1)?pp2.dZ():pp2.dPerp();
+	      const float dPhi2 = pp2.dPhi();
+	      if (std::hypot(dRz2,dPhi2) < min_dist) {
+		min_dist = std::hypot(dRz2, dPhi2);
+		min_dRz2 = dRz2;
+		min_dPhi2 = dPhi2;
+		min_subDet2 = subDet2;
+		min_lay2 = tTopo.layer(id2);
+		min_hitsMask = (1<<idx1)|(1<<idx2);
+	      }
+	    }
+	    scl_lay2_.push_back(min_lay2);
+	    scl_subDet2_.push_back(min_subDet2);
+	    scl_dRz2_.push_back(min_dRz2);
+	    scl_dPhi2_.push_back(min_dPhi2);
+	    scl_hitsMask_.push_back(min_hitsMask);
+	  }
+	}
+      }
+    }
+    scl_charge.push_back(scl_charge_);
+    scl_lay1.push_back(scl_lay1_);
+    scl_lay2.push_back(scl_lay2_);
+    scl_subDet1.push_back(scl_subDet1_);
+    scl_subDet2.push_back(scl_subDet2_);
+    scl_dRz1.push_back(scl_dRz1_);
+    scl_dPhi1.push_back(scl_dPhi1_);
+    scl_dRz2.push_back(scl_dRz2_);
+    scl_dPhi2.push_back(scl_dPhi2_);
+    scl_hitsMask.push_back(scl_hitsMask_);
+    scl_seedType.push_back(scl_seedType_);
+
+  }
+
+  if (prop1stLayer) delete prop1stLayer;
+  if (prop2ndLayer) delete prop2ndLayer;
+  
+}
+  
+
 // ------------ method fills 'descriptions' with the allowed parameters for the module  ------------
 void TrackingNtuple::fillDescriptions(edm::ConfigurationDescriptions& descriptions) {
   //The following says we do not know what parameters are allowed so do no validation
@@ -2882,6 +3169,9 @@ void TrackingNtuple::fillDescriptions(edm::ConfigurationDescriptions& descriptio
       edm::InputTag("seedTrackspixelPairElectronSeeds"),
       edm::InputTag("seedTracksstripPairElectronSeeds")
   });
+  // Supercluster
+  desc.addUntracked<edm::InputTag>("barrelSuperClusters", edm::InputTag("particleFlowSuperClusterECAL:particleFlowSuperClusterECALBarrel"));
+  desc.addUntracked<edm::InputTag>("endcapSuperClusters", edm::InputTag("particleFlowSuperClusterECAL:particleFlowSuperClusterECALEndcapWithPreshower"));
   desc.addUntracked<edm::InputTag>("tracks", edm::InputTag("electronGsfTracks"));
   desc.addUntracked<edm::InputTag>("genParticles", edm::InputTag("genParticles"));
   desc.addUntracked<edm::InputTag>("trackingParticles", edm::InputTag("mix", "MergedTrackTruth"));

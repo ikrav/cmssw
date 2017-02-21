@@ -27,7 +27,7 @@ process.load('DQMOffline.Configuration.DQMOfflineMC_cff')
 process.load('Configuration.StandardSequences.FrontierConditions_GlobalTag_cff')
 
 process.maxEvents = cms.untracked.PSet(
-    input = cms.untracked.int32(10)
+    input = cms.untracked.int32(-1)
 )
 
 # Input source
@@ -143,7 +143,9 @@ process.schedule = cms.Schedule(process.raw2digi_step,process.L1Reco_step,proces
 from Validation.RecoTrack.customiseTrackingNtuple import customiseTrackingNtuple 
 
 #call to customisation function customiseTrackingNtuple imported from Validation.RecoTrack.customiseTrackingNtuple
+print 'Customizing ntuple'
 process = customiseTrackingNtuple(process)
+print 'Done'
 
 # Automatic addition of the customisation function from SimGeneral.MixingModule.fullMixCustomize_cff
 from SimGeneral.MixingModule.fullMixCustomize_cff import setCrossingFrameOn 
