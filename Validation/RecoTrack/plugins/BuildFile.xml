@@ -36,6 +36,7 @@
 <use   name="RecoEgamma/EgammaElectronAlgos"/>
 <use   name="DataFormats/CaloRecHit"/>
 <use   name="DataFormats/GeometryCommonDetAlgo"/>
+<use   name="PhysicsTools/HepMCCandAlgos"/>
 <lib   name="MathMore"/>
 <library   file="*.cc" name="ValidationRecoTrackPlugins">
   <flags   EDM_PLUGIN="1"/>

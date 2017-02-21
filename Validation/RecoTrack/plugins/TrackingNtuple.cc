@@ -89,6 +89,7 @@
 
 // SuperCluster : added for electron studies
 #include "DataFormats/Math/interface/deltaPhi.h"
+#include "DataFormats/Math/interface/deltaR.h"
 #include "DataFormats/HepMCCandidate/interface/GenParticle.h"
 #include "DataFormats/HepMCCandidate/interface/GenParticleFwd.h"
 #include "TrackingTools/PatternTools/interface/trackingParametersAtClosestApproachToBeamSpot.h"
@@ -100,7 +101,7 @@
 #include "RecoEgamma/EgammaElectronAlgos/interface/FTSFromVertexToPointFactory.h"
 #include "RecoEgamma/EgammaElectronAlgos/interface/ElectronUtilities.h"
 #include "DataFormats/GeometryCommonDetAlgo/interface/PerpendicularBoundPlaneBuilder.h"
-
+#include "PhysicsTools/HepMCCandAlgos/interface/MCTruthHelper.h"
 #include <set>
 #include <map>
 #include <unordered_set>
@@ -536,11 +537,16 @@ private:
   std::vector<float> gen_vy       ;
   std::vector<float> gen_vz       ;
   std::vector<int>   gen_status   ;
+  std::vector<int>   gen_mother   ;
+  std::vector<bool>  gen_isTauDecayProduct;
+  std::vector<bool>  gen_isDirectHadronDecayProduct;
+  std::vector<bool>  gen_isPrompt;
 
   ////////////////////
   // tracks
   // (first) index runs through tracks
   std::vector<int>   trk_genIdx   ;
+  std::vector<float> trk_genDR    ;
   std::vector<float> trk_px       ;
   std::vector<float> trk_py       ;
   std::vector<float> trk_pz       ;
@@ -968,6 +974,7 @@ TrackingNtuple::TrackingNtuple(const edm::ParameterSet& iConfig):
     t->Branch("trk_hitType", &trk_hitType);
   }
   t->Branch("trk_genIdx", &trk_genIdx);
+  t->Branch("trk_genDR", &trk_genDR);
   //sim tracks
   t->Branch("sim_event"    , &sim_event    );
   t->Branch("sim_bunchCrossing", &sim_bunchCrossing);
@@ -1205,6 +1212,10 @@ TrackingNtuple::TrackingNtuple(const edm::ParameterSet& iConfig):
   t->Branch("gen_vy", &gen_vy);
   t->Branch("gen_vz", &gen_vz);
   t->Branch("gen_status", &gen_status);
+  t->Branch("gen_mother", &gen_mother);
+  t->Branch("gen_isTauDecayProduct", &gen_isTauDecayProduct);
+  t->Branch("gen_isDirectHadronDecayProduct", &gen_isDirectHadronDecayProduct);
+  t->Branch("gen_isPrompt", &gen_isPrompt);
 
   // tracking vertices
   t->Branch("simvtx_event"   , &simvtx_event    );
@@ -1328,6 +1339,7 @@ void TrackingNtuple::clearVariables() {
   trk_hitIdx   .clear();
   trk_hitType  .clear();
   trk_genIdx   .clear();
+  trk_genDR    .clear();
   //sim tracks
   sim_event    .clear();
   sim_bunchCrossing.clear();
@@ -1552,6 +1564,10 @@ void TrackingNtuple::clearVariables() {
   gen_vy.clear();
   gen_vz.clear();
   gen_status.clear();
+  gen_mother.clear();
+  gen_isTauDecayProduct.clear();
+  gen_isDirectHadronDecayProduct.clear();
+  gen_isPrompt.clear();
 
 }
 
@@ -2619,6 +2635,7 @@ void TrackingNtuple::fillTracks(const edm::RefToBaseVector<reco::Track>& tracks,
     float minchi2 = 10000000000.;
     int trk_minchi2 = -1;
     int trk_counter = 0;
+    float trk_mindR = -999;
     for(auto&& genParticle : genParticles) {      
 
       if (genParticle.charge() == 0) continue;
@@ -2637,13 +2654,14 @@ void TrackingNtuple::fillTracks(const edm::RefToBaseVector<reco::Track>& tracks,
 	if (chi2 < minchi2) {
 	  trk_minchi2 = trk_counter;
 	  minchi2 = chi2;
+	  trk_mindR = reco::deltaR(*itTrack, genParticle);
 	}
       }
       trk_counter++;
 
     }
     trk_genIdx.push_back(trk_minchi2);
-
+    trk_genDR.push_back(trk_mindR);
     trk_px       .push_back(itTrack->px());
     trk_py       .push_back(itTrack->py());
     trk_pz       .push_back(itTrack->pz());
@@ -2935,6 +2953,8 @@ void TrackingNtuple::fillVertices(const reco::VertexCollection& vertices,
 }
 
 void TrackingNtuple::fillGenParticles(const reco::GenParticleCollection& genParticles) {
+
+  MCTruthHelper<reco::GenParticle> mcTruthHelper;
   
   for (auto&& genParticle : genParticles) {
 
@@ -2950,6 +2970,13 @@ void TrackingNtuple::fillGenParticles(const reco::GenParticleCollection& genPart
     gen_vy.push_back(genParticle.vertex().y());
     gen_vz.push_back(genParticle.vertex().z());
     gen_status.push_back(genParticle.status());
+
+
+    gen_mother.push_back((mcTruthHelper.uniqueMother(genParticle))->pdgId());
+    gen_isTauDecayProduct.push_back(mcTruthHelper.isTauDecayProduct(genParticle));
+    gen_isDirectHadronDecayProduct.push_back(mcTruthHelper.isDirectHadronDecayProduct(genParticle));
+    gen_isPrompt.push_back(mcTruthHelper.isPrompt(genParticle));
+    
   }
 
 }
