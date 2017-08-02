@@ -17,6 +17,10 @@
 //
 
 
+/// To do: save relative positions of pixel hits and superclusters like in pixel hits
+///        link seeds to superclusters - DONE!!!
+
+
 // system include files
 #include <memory>
 
@@ -47,6 +51,7 @@
 #include "DataFormats/TrajectorySeed/interface/TrajectorySeed.h"
 #include "DataFormats/TrajectorySeed/interface/TrajectorySeedCollection.h"
 #include "TrackingTools/TrajectoryState/interface/TrajectoryStateTransform.h"
+#include "DataFormats/EgammaReco/interface/ElectronSeed.h"
 #include "RecoPixelVertexing/PixelTrackFitting/interface/RZLine.h"
 #include "TrackingTools/PatternTools/interface/TSCBLBuilderNoMaterial.h"
 #include "TrackingTools/TrajectoryState/interface/PerigeeConversions.h"
@@ -81,6 +86,22 @@
 
 #include "Validation/RecoTrack/interface/trackFromSeedFitFailed.h"
 
+
+// SuperCluster : added for electron studies
+#include "DataFormats/Math/interface/deltaPhi.h"
+#include "DataFormats/Math/interface/deltaR.h"
+#include "DataFormats/HepMCCandidate/interface/GenParticle.h"
+#include "DataFormats/HepMCCandidate/interface/GenParticleFwd.h"
+#include "TrackingTools/PatternTools/interface/trackingParametersAtClosestApproachToBeamSpot.h"
+#include "DataFormats/EgammaReco/interface/SuperCluster.h"
+#include "DataFormats/EgammaReco/interface/SuperClusterFwd.h"
+#include "TrackingTools/MaterialEffects/interface/PropagatorWithMaterial.h"
+#include "DataFormats/CaloRecHit/interface/CaloID.h"
+#include "RecoEgamma/EgammaElectronAlgos/interface/PixelMatchStartLayers.h"
+#include "RecoEgamma/EgammaElectronAlgos/interface/FTSFromVertexToPointFactory.h"
+#include "RecoEgamma/EgammaElectronAlgos/interface/ElectronUtilities.h"
+#include "DataFormats/GeometryCommonDetAlgo/interface/PerpendicularBoundPlaneBuilder.h"
+#include "PhysicsTools/HepMCCandAlgos/interface/MCTruthHelper.h"
 #include <set>
 #include <map>
 #include <unordered_set>
@@ -255,6 +276,25 @@ namespace {
     return simTrackIdToAdc;
   }
 
+  bool sameSeed(const TrajectorySeed & s1,const TrajectorySeed & s2) {
+    if(s1.nHits()==0 && s2.nHits()==0) return false;
+    if(s1.nHits() != s2.nHits()) return false;
+    
+    TrajectorySeed::range r1 = s1.recHits();
+    TrajectorySeed::range r2 = s2.recHits();
+    
+    TrajectorySeed::const_iterator h1 = r1.first;
+    TrajectorySeed::const_iterator h2 = r2.first;
+    
+    do {
+      if(!(h1->sharesInput(&(*h2),TrackingRecHit::all)))
+	return false;      
+      h1++; h2++;
+    }
+    while(h1 != s1.recHits().second && 
+	  h2 != s2.recHits().second);    
+    return true;
+  }
 }
 
 //
@@ -281,6 +321,8 @@ private:
   typedef TrackingParticleRefKeyToIndex TrackingVertexRefKeyToIndex;
   typedef std::pair<TrackPSimHitRef::key_type, edm::ProductID> SimHitFullKey;
   typedef std::map<SimHitFullKey, size_t> SimHitRefKeyToIndex;
+  //Supercluster
+  typedef std::map<reco::SuperClusterRef::key_type, size_t> SuperClusterKeyToIndex;
 
   enum class HitType {
     Pixel = 0,
@@ -370,18 +412,25 @@ private:
                  const MagneticField *theMF,
                  const std::vector<std::pair<int, int> >& monoStereoClusterList,
                  const std::set<edm::ProductID>& hitProductIds,
-                 std::map<edm::ProductID, size_t>& seedToCollIndex
+                 std::map<edm::ProductID, size_t>& seedToCollIndex,
+		 // supercluster
+		 const SuperClusterKeyToIndex& scKeyToIndexEB,
+		 const SuperClusterKeyToIndex& scKeyToIndexEE
                  );
+
+  void fillGenParticles(const reco::GenParticleCollection& genParticles);
 
   void fillTracks(const edm::RefToBaseVector<reco::Track>& tracks,
                   const TrackingParticleRefVector& tpCollection,
                   const TrackingParticleRefKeyToIndex& tpKeyToIndex,
                   const reco::BeamSpot& bs,
+		  const MagneticField *theMF,
                   const reco::TrackToTrackingParticleAssociator& associatorByHits,
                   const TransientTrackingRecHitBuilder& theTTRHBuilder,
                   const TrackerTopology& tTopo,
                   const std::set<edm::ProductID>& hitProductIds,
-                  const std::map<edm::ProductID, size_t>& seedToCollIndex
+                  const std::map<edm::ProductID, size_t>& seedToCollIndex,
+		  const reco::GenParticleCollection& genParticles
                   );
 
   void fillSimHits(const TrackerGeometry& tracker,
@@ -407,6 +456,15 @@ private:
                             );
 
 
+  // supercluster
+  void fillSuperClusters(const edm::Event& iEvent,
+			 const reco::SuperClusterCollection& scCollEB,
+			 const reco::SuperClusterCollection& scCollEE,
+			 const reco::BeamSpot& bs,
+			 const MagneticField *theMF,
+			 const TrackerTopology& tTopo
+			 );
+
 
   struct SimHitData {
     std::vector<int> matchingSimHit;
@@ -430,6 +488,7 @@ private:
 
   // ----------member data ---------------------------
   std::vector<edm::EDGetTokenT<edm::View<reco::Track> > > seedTokens_;
+  std::vector<edm::EDGetTokenT<edm::View<reco::Track> > > seedTokensOriginal_;
   edm::EDGetTokenT<edm::View<reco::Track> > trackToken_;
   edm::EDGetTokenT<TrackingParticleCollection> trackingParticleToken_;
   edm::EDGetTokenT<TrackingParticleRefVector> trackingParticleRefToken_;
@@ -456,6 +515,11 @@ private:
   const bool includeSeeds_;
   const bool includeAllHits_;
 
+  edm::EDGetTokenT<reco::GenParticleCollection> genParticlesToken_;
+  // SuperClusters
+  edm::EDGetTokenT<reco::SuperClusterCollection> superClusterTokenEB_;
+  edm::EDGetTokenT<reco::SuperClusterCollection> superClusterTokenEE_;
+
   TTree* t;
   // event
   edm::RunNumber_t ev_run;
@@ -463,8 +527,26 @@ private:
   edm::EventNumber_t ev_event;
 
   ////////////////////
+  // (first) index runs over gen particles
+  std::vector<float> gen_px       ;
+  std::vector<float> gen_py       ;
+  std::vector<float> gen_pz       ;
+  std::vector<float> gen_charge   ;
+  std::vector<int>   gen_pdgId    ;
+  std::vector<float> gen_vx       ;
+  std::vector<float> gen_vy       ;
+  std::vector<float> gen_vz       ;
+  std::vector<int>   gen_status   ;
+  std::vector<int>   gen_mother   ;
+  std::vector<bool>  gen_isTauDecayProduct;
+  std::vector<bool>  gen_isDirectHadronDecayProduct;
+  std::vector<bool>  gen_isPrompt;
+
+  ////////////////////
   // tracks
   // (first) index runs through tracks
+  std::vector<int>   trk_genIdx   ;
+  std::vector<float> trk_genDR    ;
   std::vector<float> trk_px       ;
   std::vector<float> trk_py       ;
   std::vector<float> trk_pz       ;
@@ -509,7 +591,9 @@ private:
   std::vector<unsigned int> trk_stopReason;
   std::vector<short> trk_isHP    ;
   std::vector<int> trk_seedIdx ;
-  std::vector<int> trk_vtxIdx;
+  std::vector<float> trk_vtxx;
+  std::vector<float> trk_vtxy;
+  std::vector<float> trk_vtxz;
   std::vector<std::vector<float> > trk_shareFrac; // second index runs through matched TrackingParticles
   std::vector<std::vector<int> > trk_simTrkIdx;   // second index runs through matched TrackingParticles
   std::vector<std::vector<int> > trk_hitIdx;      // second index runs through hits
@@ -695,11 +779,33 @@ private:
   std::vector<unsigned int> see_nStrip  ;
   std::vector<unsigned int> see_nPhase2OT;
   std::vector<unsigned int> see_algo    ;
+  std::vector<unsigned int> see_algoOriginal    ;
   std::vector<int> see_trkIdx;
   std::vector<std::vector<float> > see_shareFrac; // second index runs through matched TrackingParticles
   std::vector<std::vector<int> > see_simTrkIdx;   // second index runs through matched TrackingParticles
   std::vector<std::vector<int> > see_hitIdx;      // second index runs through hits
   std::vector<std::vector<int> > see_hitType;     // second index runs through hits
+  // Those are for ECAL driven electrons
+  std::vector<unsigned char> see_hitsMask;
+  std::vector<int> see_subDet2;
+  std::vector<float> see_dRz2;
+  std::vector<float> see_dPhi2;
+  std::vector<float> see_dRz2Pos;
+  std::vector<float> see_dPhi2Pos;
+  std::vector<int> see_subDet1;
+  std::vector<float> see_dRz1;
+  std::vector<float> see_dPhi1;
+  std::vector<float> see_dRz1Pos;
+  std::vector<float> see_dPhi1Pos;
+  std::vector<float> see_hoe1;
+  std::vector<float> see_hoe2;
+  std::vector<float> see_superClusterEnergy;
+  std::vector<float> see_superClusterEta;
+  std::vector<float> see_superClusterPhi;
+  std::vector<float> see_superClusterEt;
+  std::vector<int>   see_superClusterIdx;
+  std::vector<unsigned int> see_ecalDriven;
+  std::vector<unsigned int> see_trkDriven;  
   //seed algo offset, index runs through iterations
   std::vector<unsigned int> see_offset  ;
 
@@ -731,6 +837,31 @@ private:
   std::vector<std::vector<int> > simvtx_sourceSimIdx;   // second index runs through source TrackingParticles
   std::vector<std::vector<int> > simvtx_daughterSimIdx; // second index runs through daughter TrackingParticles
   std::vector<int> simpv_idx;
+
+
+  /////////////////////
+  // Super cluster
+  // first index runs through SuperClusters
+  // second index runs through pixel hits in [-1,1] x [-1,1] window
+  std::vector<float> scl_e;
+  std::vector<float> scl_px;
+  std::vector<float> scl_py;
+  std::vector<float> scl_pz;
+  std::vector<float> scl_x;
+  std::vector<float> scl_y;
+  std::vector<float> scl_z;
+  std::vector<std::vector<int> >  scl_charge;
+  std::vector<std::vector<int> >   scl_lay1;  
+  std::vector<std::vector<int> >   scl_lay2;  
+  std::vector<std::vector<int> >   scl_subDet1;
+  std::vector<std::vector<int> >   scl_subDet2;
+  std::vector<std::vector<float> > scl_dRz1;
+  std::vector<std::vector<float> > scl_dPhi1;
+  std::vector<std::vector<float> > scl_dRz2;
+  std::vector<std::vector<float> > scl_dPhi2;
+  std::vector<std::vector<int> > scl_seedType;
+  std::vector<std::vector<unsigned char> > scl_hitsMask;
+  
 };
 
 //
@@ -738,6 +869,9 @@ private:
 //
 TrackingNtuple::TrackingNtuple(const edm::ParameterSet& iConfig):
   seedTokens_(edm::vector_transform(iConfig.getUntrackedParameter<std::vector<edm::InputTag> >("seedTracks"), [&](const edm::InputTag& tag) {
+        return consumes<edm::View<reco::Track> >(tag);
+      })),
+  seedTokensOriginal_(edm::vector_transform(iConfig.getUntrackedParameter<std::vector<edm::InputTag> >("seedTracksOriginal"), [&](const edm::InputTag& tag) {
         return consumes<edm::View<reco::Track> >(tag);
       })),
   trackToken_(consumes<edm::View<reco::Track> >(iConfig.getUntrackedParameter<edm::InputTag>("tracks"))),
@@ -763,7 +897,12 @@ TrackingNtuple::TrackingNtuple(const edm::ParameterSet& iConfig):
   builderName_(iConfig.getUntrackedParameter<std::string>("TTRHBuilder")),
   parametersDefinerName_(iConfig.getUntrackedParameter<std::string>("parametersDefiner")),
   includeSeeds_(iConfig.getUntrackedParameter<bool>("includeSeeds")),
-  includeAllHits_(iConfig.getUntrackedParameter<bool>("includeAllHits"))
+  includeAllHits_(iConfig.getUntrackedParameter<bool>("includeAllHits")),
+  genParticlesToken_(consumes<reco::GenParticleCollection>(iConfig.getUntrackedParameter<edm::InputTag>("genParticles"))),
+  // SuperCluster
+  superClusterTokenEB_(consumes<reco::SuperClusterCollection>(iConfig.getUntrackedParameter<edm::InputTag>("barrelSuperClusters"))),
+  superClusterTokenEE_(consumes<reco::SuperClusterCollection>(iConfig.getUntrackedParameter<edm::InputTag>("endcapSuperClusters")))
+
 {
   const bool tpRef = iConfig.getUntrackedParameter<bool>("trackingParticlesRef");
   const auto tpTag = iConfig.getUntrackedParameter<edm::InputTag>("trackingParticles");
@@ -829,13 +968,17 @@ TrackingNtuple::TrackingNtuple(const edm::ParameterSet& iConfig):
   if(includeSeeds_) {
     t->Branch("trk_seedIdx"  , &trk_seedIdx );
   }
-  t->Branch("trk_vtxIdx"   , &trk_vtxIdx);
+  t->Branch("trk_vtxx"   , &trk_vtxx);
+  t->Branch("trk_vtxy"   , &trk_vtxy);
+  t->Branch("trk_vtxz"   , &trk_vtxz);
   t->Branch("trk_shareFrac", &trk_shareFrac);
   t->Branch("trk_simTrkIdx", &trk_simTrkIdx  );
   if(includeAllHits_) {
     t->Branch("trk_hitIdx" , &trk_hitIdx);
     t->Branch("trk_hitType", &trk_hitType);
   }
+  t->Branch("trk_genIdx", &trk_genIdx);
+  t->Branch("trk_genDR", &trk_genDR);
   //sim tracks
   t->Branch("sim_event"    , &sim_event    );
   t->Branch("sim_bunchCrossing", &sim_bunchCrossing);
@@ -1017,6 +1160,7 @@ TrackingNtuple::TrackingNtuple(const edm::ParameterSet& iConfig):
     t->Branch("see_nStrip"   , &see_nStrip  );
     t->Branch("see_nPhase2OT", &see_nPhase2OT);
     t->Branch("see_algo"     , &see_algo    );
+    t->Branch("see_algoOriginal"     , &see_algoOriginal    );
     t->Branch("see_trkIdx"   , &see_trkIdx  );
     t->Branch("see_shareFrac", &see_shareFrac);
     t->Branch("see_simTrkIdx", &see_simTrkIdx  );
@@ -1026,6 +1170,27 @@ TrackingNtuple::TrackingNtuple(const edm::ParameterSet& iConfig):
     }
     //seed algo offset
     t->Branch("see_offset"  , &see_offset );
+    t->Branch("see_hitsMask", &see_hitsMask);
+    t->Branch("see_subDet2", &see_subDet2);
+    t->Branch("see_dRz2", &see_dRz2);
+    t->Branch("see_dPhi2", &see_dPhi2);
+    t->Branch("see_dRz2Pos", &see_dRz2Pos);
+    t->Branch("see_dPhi2Pos", &see_dPhi2Pos);
+    t->Branch("see_subDet1", &see_subDet1);
+    t->Branch("see_dRz1", &see_dRz1);
+    t->Branch("see_dPhi1", &see_dPhi1);
+    t->Branch("see_dRz1Pos", &see_dRz1Pos);
+    t->Branch("see_dPhi1Pos", &see_dPhi1Pos);
+    t->Branch("see_hoe1", &see_hoe1);
+    t->Branch("see_hoe2", &see_hoe2);
+    t->Branch("see_superClusterEnergy", &see_superClusterEnergy);
+    t->Branch("see_superClusterEta", &see_superClusterEta);
+    t->Branch("see_superClusterPhi", &see_superClusterPhi);
+    t->Branch("see_superClusterEt", &see_superClusterEt);
+    t->Branch("see_superClusterIdx", &see_superClusterIdx);
+    t->Branch("see_ecalDriven", &see_ecalDriven);
+    t->Branch("see_trkDriven", &see_trkDriven);
+
   }
 
   //vertices
@@ -1041,6 +1206,21 @@ TrackingNtuple::TrackingNtuple(const edm::ParameterSet& iConfig):
   t->Branch("vtx_valid"   , &vtx_valid);
   t->Branch("vtx_trkIdx"  , &vtx_trkIdx);
 
+  //genparticles
+  t->Branch("gen_px", &gen_px);
+  t->Branch("gen_py", &gen_py);
+  t->Branch("gen_pz", &gen_pz);
+  t->Branch("gen_charge", &gen_charge);
+  t->Branch("gen_pdgId", &gen_pdgId);
+  t->Branch("gen_vx", &gen_vx);
+  t->Branch("gen_vy", &gen_vy);
+  t->Branch("gen_vz", &gen_vz);
+  t->Branch("gen_status", &gen_status);
+  t->Branch("gen_mother", &gen_mother);
+  t->Branch("gen_isTauDecayProduct", &gen_isTauDecayProduct);
+  t->Branch("gen_isDirectHadronDecayProduct", &gen_isDirectHadronDecayProduct);
+  t->Branch("gen_isPrompt", &gen_isPrompt);
+
   // tracking vertices
   t->Branch("simvtx_event"   , &simvtx_event    );
   t->Branch("simvtx_bunchCrossing", &simvtx_bunchCrossing);
@@ -1052,6 +1232,26 @@ TrackingNtuple::TrackingNtuple(const edm::ParameterSet& iConfig):
   t->Branch("simvtx_daughterSimIdx", &simvtx_daughterSimIdx);
 
   t->Branch("simpv_idx"      , &simpv_idx);
+
+
+  t->Branch("scl_e", &scl_e);
+  t->Branch("scl_px", &scl_px);
+  t->Branch("scl_py", &scl_py);
+  t->Branch("scl_pz", &scl_pz);
+  t->Branch("scl_x", &scl_x);
+  t->Branch("scl_y", &scl_y);
+  t->Branch("scl_z", &scl_z);
+  t->Branch("scl_charge", &scl_charge);
+  t->Branch("scl_lay1", &scl_lay1);
+  t->Branch("scl_lay2", &scl_lay2);
+  t->Branch("scl_subDet1", &scl_subDet1);
+  t->Branch("scl_subDet2", &scl_subDet2);
+  t->Branch("scl_dRz1", &scl_dRz1);
+  t->Branch("scl_dPhi1", &scl_dPhi1);
+  t->Branch("scl_dRz2", &scl_dRz2);
+  t->Branch("scl_dPhi2", &scl_dPhi2);
+  t->Branch("scl_seedType", &scl_seedType);
+  t->Branch("scl_hitsMask", &scl_hitsMask);
 
   //t->Branch("" , &);
 }
@@ -1071,6 +1271,26 @@ void TrackingNtuple::clearVariables() {
   ev_run = 0;
   ev_lumi = 0;
   ev_event = 0;
+
+  //scl
+  scl_e.clear();
+  scl_px.clear();
+  scl_py.clear();
+  scl_pz.clear();
+  scl_x.clear();
+  scl_y.clear();
+  scl_z.clear();
+  scl_charge.clear();
+  scl_lay1.clear();  
+  scl_lay2.clear();  
+  scl_subDet1.clear();
+  scl_subDet2.clear();
+  scl_dRz1.clear();
+  scl_dPhi1.clear();
+  scl_dRz2.clear();
+  scl_dPhi2.clear();
+  scl_seedType.clear();
+  scl_hitsMask.clear();
 
   //tracks
   trk_px       .clear();
@@ -1117,11 +1337,15 @@ void TrackingNtuple::clearVariables() {
   trk_stopReason.clear();
   trk_isHP     .clear();
   trk_seedIdx  .clear();
-  trk_vtxIdx   .clear();
+  trk_vtxx   .clear();
+  trk_vtxy   .clear();
+  trk_vtxz   .clear();
   trk_shareFrac.clear();
   trk_simTrkIdx.clear();
   trk_hitIdx   .clear();
   trk_hitType  .clear();
+  trk_genIdx   .clear();
+  trk_genDR    .clear();
   //sim tracks
   sim_event    .clear();
   sim_bunchCrossing.clear();
@@ -1262,6 +1486,26 @@ void TrackingNtuple::clearVariables() {
   bsp_sigmay = -9999.;
   bsp_sigmaz = -9999.;
   //seeds
+  see_hitsMask.clear();
+  see_subDet2.clear();
+  see_dRz2.clear();
+  see_dPhi2.clear();
+  see_dRz2Pos.clear();
+  see_dPhi2Pos.clear();
+  see_subDet1.clear();
+  see_dRz1.clear();
+  see_dPhi1.clear();
+  see_dRz1Pos.clear();
+  see_dPhi1Pos.clear();
+  see_hoe1.clear();
+  see_hoe2.clear();
+  see_superClusterEnergy.clear();
+  see_superClusterEta.clear();
+  see_superClusterPhi.clear();
+  see_superClusterEt.clear();
+  see_superClusterIdx.clear();
+  see_ecalDriven.clear();
+  see_trkDriven.clear();
   see_fitok   .clear();
   see_px      .clear();
   see_py      .clear();
@@ -1284,6 +1528,7 @@ void TrackingNtuple::clearVariables() {
   see_nStrip  .clear();
   see_nPhase2OT.clear();
   see_algo    .clear();
+  see_algoOriginal    .clear();
   see_trkIdx  .clear();
   see_shareFrac.clear();
   see_simTrkIdx.clear();
@@ -1314,6 +1559,22 @@ void TrackingNtuple::clearVariables() {
   simvtx_sourceSimIdx.clear();
   simvtx_daughterSimIdx.clear();
   simpv_idx.clear();
+
+  // gen particles
+  gen_px.clear();
+  gen_py.clear();
+  gen_pz.clear();
+  gen_charge.clear();
+  gen_pdgId.clear();
+  gen_vx.clear();
+  gen_vy.clear();
+  gen_vz.clear();
+  gen_status.clear();
+  gen_mother.clear();
+  gen_isTauDecayProduct.clear();
+  gen_isDirectHadronDecayProduct.clear();
+  gen_isPrompt.clear();
+
 }
 
 
@@ -1432,7 +1693,6 @@ void TrackingNtuple::analyze(const edm::Event& iEvent, const edm::EventSetup& iS
   BeamSpot const & bs = *recoBeamSpotHandle;
   fillBeamSpot(bs);
 
-
   //prapare list to link matched hits to collection
   vector<pair<int,int> > monoStereoClusterList;
   if(includeAllHits_) {
@@ -1457,28 +1717,52 @@ void TrackingNtuple::analyze(const edm::Event& iEvent, const edm::EventSetup& iS
       const auto& phase2OTSimLinks = *siphase2OTSimLinksHandle;
       fillPhase2OTHits(iEvent, clusterToTPMap, tpKeyToIndex, *simHitsTPAssoc, phase2OTSimLinks, *theTTRHBuilder, tTopo, simHitRefKeyToIndex, hitProductIds);
     }
+
   }
 
   //seeds
   if(includeSeeds_) {
-    fillSeeds(iEvent, tpCollection, tpKeyToIndex, bs, associatorByHits, *theTTRHBuilder, theMF.product(), monoStereoClusterList, hitProductIds, seedCollToOffset);
+    edm::Handle<reco::SuperClusterCollection> scHandleEB;
+    iEvent.getByToken(superClusterTokenEB_, scHandleEB);
+    edm::Handle<reco::SuperClusterCollection> scHandleEE;
+    iEvent.getByToken(superClusterTokenEE_, scHandleEE);
+    SuperClusterKeyToIndex scKeyToIndexEB;
+    SuperClusterKeyToIndex scKeyToIndexEE;
+    for (size_t i=0; i<scHandleEB->size(); i++) 
+      scKeyToIndexEB[edm::Ref<reco::SuperClusterCollection>(scHandleEB, i).key()] = i;
+    for (size_t i=0; i<scHandleEE->size(); i++) 
+      scKeyToIndexEE[edm::Ref<reco::SuperClusterCollection>(scHandleEE, i).key()] = i;
+
+    fillSeeds(iEvent, tpCollection, tpKeyToIndex, bs, associatorByHits, *theTTRHBuilder, theMF.product(), monoStereoClusterList, hitProductIds, seedCollToOffset, scKeyToIndexEB, scKeyToIndexEE);
+    // superClusters ... it needs to be here, inside
+    fillSuperClusters(iEvent, *scHandleEB, *scHandleEE, bs, theMF.product(), tTopo);
   }
 
   //tracks
   edm::Handle<edm::View<reco::Track> > tracksHandle;
   iEvent.getByToken(trackToken_, tracksHandle);
   const edm::View<reco::Track>& tracks = *tracksHandle;
+
+  edm::Handle<GenParticleCollection>  genParticlesHandle;
+  iEvent.getByToken(genParticlesToken_,genParticlesHandle);
+  const GenParticleCollection& genParticles = *genParticlesHandle;
+  fillGenParticles(genParticles);
+
   // The associator interfaces really need to be fixed...
   edm::RefToBaseVector<reco::Track> trackRefs;
   for(edm::View<Track>::size_type i=0; i<tracks.size(); ++i) {
     trackRefs.push_back(tracks.refAt(i));
   }
-  fillTracks(trackRefs, tpCollection, tpKeyToIndex, bs, associatorByHits, *theTTRHBuilder, tTopo, hitProductIds, seedCollToOffset);
+
+  fillTracks(trackRefs, tpCollection, tpKeyToIndex, bs, theMF.product(), associatorByHits, *theTTRHBuilder, tTopo, hitProductIds, seedCollToOffset, genParticles);
 
   //tracking particles
   //sort association maps with simHits
   std::sort( tpHitList.begin(), tpHitList.end(), tpHitIndexListLessSort );
   fillTrackingParticles(iEvent, iSetup, trackRefs, tpCollection, tvKeyToIndex, associatorByHits, tpHitList);
+
+  // tracking vertices
+  fillTrackingVertices(tvRefs, tpKeyToIndex);
 
   // vertices
   edm::Handle<reco::VertexCollection> vertices;
@@ -1988,15 +2272,22 @@ void TrackingNtuple::fillSeeds(const edm::Event& iEvent,
                                const MagneticField *theMF,
                                const std::vector<std::pair<int, int> >& monoStereoClusterList,
                                const std::set<edm::ProductID>& hitProductIds,
-                               std::map<edm::ProductID, size_t>& seedCollToOffset
+                               std::map<edm::ProductID, size_t>& seedCollToOffset,
+			       const SuperClusterKeyToIndex& scKeyToIndexEB,
+			       const SuperClusterKeyToIndex& scKeyToIndexEE
                                ) {
   TSCBLBuilderNoMaterial tscblBuilder;
+  
   for(const auto& seedToken: seedTokens_) {
     edm::Handle<edm::View<reco::Track> > seedTracksHandle;
     iEvent.getByToken(seedToken, seedTracksHandle);
     const auto& seedTracks = *seedTracksHandle;
 
-    if(seedTracks.empty())
+    edm::EDConsumerBase::Labels labels;
+    labelsForToken(seedToken, labels);
+    TString label = labels.module;    
+
+    if(seedTracks.empty()) 
       continue;
 
     // The associator interfaces really need to be fixed...
@@ -2006,9 +2297,6 @@ void TrackingNtuple::fillSeeds(const edm::Event& iEvent,
     }
     reco::RecoToSimCollection recSimColl = associatorByHits.associateRecoToSim(seedTrackRefs, tpCollection);
 
-    edm::EDConsumerBase::Labels labels;
-    labelsForToken(seedToken, labels);
-    TString label = labels.module;
     //format label to match algoName
     label.ReplaceAll("seedTracks", "");
     label.ReplaceAll("Seeds","");
@@ -2017,6 +2305,7 @@ void TrackingNtuple::fillSeeds(const edm::Event& iEvent,
 
     edm::ProductID id = seedTracks[0].seedRef().id();
     auto inserted = seedCollToOffset.emplace(id, see_fitok.size());
+
     if(!inserted.second)
       throw cms::Exception("Configuration") << "Trying to add seeds with ProductID " << id << " for a second time from collection " << labels.module << ", seed algo " << label << ". Typically this is caused by a configuration problem.";
     see_offset.push_back(see_fitok.size());
@@ -2029,6 +2318,37 @@ void TrackingNtuple::fillSeeds(const edm::Event& iEvent,
       const auto& seedTrack = *seedTrackRef;
       const auto& seedRef = seedTrack.seedRef();
       const auto& seed = *seedRef;
+
+      auto electronSeed = dynamic_cast<reco::ElectronSeed const&>(seed);
+      //RCLSA: we need something much more complicated for electrons
+      edm::EDConsumerBase::Labels labelsOriginal;
+      TString labelOriginal;
+      unsigned int algoOriginal = 0;
+      if (electronSeed.caloCluster().isNull()) {
+	algoOriginal = -1;
+      } else {
+	for(const auto& seedTokenOriginal: seedTokensOriginal_) {
+	  edm::Handle<edm::View<reco::Track> > seedTracksOriginalHandle;
+	  iEvent.getByToken(seedTokenOriginal, seedTracksOriginalHandle);
+	  const auto& seedTracksOriginal_ = *seedTracksOriginalHandle;
+	  bool foundIt = false;
+	  for(const auto& seedTracksOriginal: seedTracksOriginal_) {
+	    bool isSame = sameSeed(seed, *seedTracksOriginal.seedRef());
+	    if (isSame) {
+	      labelsForToken(seedTokenOriginal, labelsOriginal);
+	      labelOriginal = labelsOriginal.module;    
+	      foundIt = true;
+	      break;
+	    }
+	  }
+	  if (foundIt) {
+	    labelOriginal.ReplaceAll("seedTracks", "");
+  	    labelOriginal.ReplaceAll("Seeds","");
+	    break;
+	  } else
+	    algoOriginal++;
+	}
+      }
 
       if(seedRef.id() != id)
         throw cms::Exception("LogicError") << "All tracks in 'TracksFromSeeds' collection should point to seeds in the same collection. Now the element 0 had ProductID " << id << " while the element " << seedTrackRef.key() << " had " << seedTrackRef.id() << ". The source collection is " << labels.module << ".";
@@ -2072,10 +2392,63 @@ void TrackingNtuple::fillSeeds(const edm::Event& iEvent,
       see_dxyErr  .push_back( seedFitOk ? seedTrack.dxyError() : 0);
       see_dzErr   .push_back( seedFitOk ? seedTrack.dzError() : 0);
       see_algo    .push_back( algo );
+      see_algoOriginal    .push_back( algoOriginal ); // RCLSA
 
       see_trkIdx  .push_back(-1); // to be set correctly in fillTracks
       see_shareFrac.push_back( sharedFraction );
       see_simTrkIdx.push_back( tpIdx );
+
+      see_hitsMask.push_back(electronSeed.hitsMask());
+      see_subDet2.push_back(electronSeed.subDet2());
+      see_dRz2.push_back(electronSeed.dRz2());
+      see_dPhi2.push_back(electronSeed.dPhi2());
+      see_dRz2Pos.push_back(electronSeed.dRz2Pos());
+      see_dPhi2Pos.push_back(electronSeed.dPhi2Pos());
+      see_subDet1.push_back(electronSeed.subDet1());
+      see_dRz1.push_back(electronSeed.dRz1());
+      see_dPhi1.push_back(electronSeed.dPhi1());
+      see_dRz1Pos.push_back(electronSeed.dRz1Pos());
+      see_dPhi1Pos.push_back(electronSeed.dPhi1Pos());
+      see_hoe1.push_back(electronSeed.hoe1());
+      see_hoe2.push_back(electronSeed.hoe2());
+
+      
+      if (!electronSeed.caloCluster().isNull()) {
+      	auto seedCluster = electronSeed.caloCluster();
+      	auto sclKey = seedCluster.key();
+      	int sclIdx = -1;
+      	if (seedCluster->caloID().detector() == reco::CaloID::DET_ECAL_BARREL) {
+      	  auto found = scKeyToIndexEB.find(sclKey);
+      	  if(found == scKeyToIndexEB.end())
+      	    continue;
+      	  else
+      	    sclIdx = found->second;
+      	} else if (seedCluster->caloID().detector() == reco::CaloID::DET_ECAL_ENDCAP) {
+      	  auto found = scKeyToIndexEE.find(sclKey);
+      	  if(found == scKeyToIndexEE.end())
+      	    continue;
+      	  else
+      	    sclIdx = found->second;
+      	}
+      	see_superClusterIdx.push_back(sclIdx);
+      	see_superClusterEnergy.push_back(seedCluster->energy());
+      	see_superClusterEta.push_back(seedCluster->position().eta());
+      	see_superClusterPhi.push_back(seedCluster->position().phi());
+      	see_superClusterEt.push_back(seedCluster->energy()*seedCluster->position().rho()/seedCluster->position().r());
+      	see_ecalDriven.push_back(1);
+      } else {
+      	see_superClusterIdx.push_back(-999);
+      	see_superClusterEnergy.push_back(-999.);
+      	see_superClusterEta.push_back(-999.);
+      	see_superClusterPhi.push_back(-999.);
+      	see_superClusterEt.push_back(-999.);
+      	see_ecalDriven.push_back(0);
+      }
+
+      if (electronSeed.ctfTrack().isNull())
+      	see_trkDriven.push_back(0);
+      else
+      	see_trkDriven.push_back(1);
 
       /// Hmm, the following could make sense instead of plain failing if propagation to beam line fails
       /*
@@ -2225,13 +2598,16 @@ void TrackingNtuple::fillTracks(const edm::RefToBaseVector<reco::Track>& tracks,
                                 const TrackingParticleRefVector& tpCollection,
                                 const TrackingParticleRefKeyToIndex& tpKeyToIndex,
                                 const reco::BeamSpot& bs,
+				const MagneticField *theMF,
                                 const reco::TrackToTrackingParticleAssociator& associatorByHits,
                                 const TransientTrackingRecHitBuilder& theTTRHBuilder,
                                 const TrackerTopology& tTopo,
                                 const std::set<edm::ProductID>& hitProductIds,
-                                const std::map<edm::ProductID, size_t>& seedCollToOffset
+                                const std::map<edm::ProductID, size_t>& seedCollToOffset,
+				const reco::GenParticleCollection& genParticles
                                 ) {
   reco::RecoToSimCollection recSimColl = associatorByHits.associateRecoToSim(tracks, tpCollection);
+
   edm::EDConsumerBase::Labels labels;
   labelsForToken(trackToken_, labels);
   LogTrace("TrackingNtuple") << "NEW TRACK LABEL: " << labels.module;
@@ -2260,6 +2636,40 @@ void TrackingNtuple::fillTracks(const edm::RefToBaseVector<reco::Track>& tracks,
     float phi = itTrack->phi();
     int nHits = itTrack->numberOfValidHits();
     const reco::HitPattern& hp = itTrack->hitPattern();
+
+    auto rParameters = itTrack->parameters();
+    auto recoTrackCovMatrix = itTrack->covariance();
+    recoTrackCovMatrix.Invert();
+    float minchi2 = 10000000000.;
+    int trk_minchi2 = -1;
+    int trk_counter = 0;
+    float trk_mindR = -999;
+    for(auto&& genParticle : genParticles) {      
+
+      if (genParticle.charge() == 0) continue;
+      if (genParticle.status() != 1) continue;
+
+      int charge = genParticle.charge();
+      Basic3DVector<double> momAtVtx(genParticle.momentum().x(),genParticle.momentum().y(),genParticle.momentum().z());
+      Basic3DVector<double> vert = (Basic3DVector<double>) genParticle.vertex();
+      auto params = reco::trackingParametersAtClosestApproachToBeamSpot(vert, momAtVtx, charge, *theMF, bs);
+      if (params.first) {
+	auto sParameters = params.second;
+	reco::TrackBase::ParameterVector diffParameters = rParameters - sParameters;
+	diffParameters[2] = reco::deltaPhi(diffParameters[2],0.f);
+	auto chi2 = ROOT::Math::Dot(diffParameters * recoTrackCovMatrix, diffParameters);
+	chi2 /= 5;
+	if (chi2 < minchi2) {
+	  trk_minchi2 = trk_counter;
+	  minchi2 = chi2;
+	  trk_mindR = reco::deltaR(*itTrack, genParticle);
+	}
+      }
+      trk_counter++;
+
+    }
+    trk_genIdx.push_back(trk_minchi2);
+    trk_genDR.push_back(trk_mindR);
     trk_px       .push_back(itTrack->px());
     trk_py       .push_back(itTrack->py());
     trk_pz       .push_back(itTrack->pz());
@@ -2315,12 +2725,14 @@ void TrackingNtuple::fillTracks(const edm::RefToBaseVector<reco::Track>& tracks,
 
       const auto seedIndex = offset->second + itTrack->seedRef().key();
       trk_seedIdx  .push_back(seedIndex);
-      if(see_trkIdx[seedIndex] != -1) {
-        throw cms::Exception("LogicError") << "Track index has already been set for seed " << seedIndex << " to " << see_trkIdx[seedIndex] << "; was trying to set it to " << iTrack;
-      }
+      //      if(see_trkIdx[seedIndex] != -1) {
+      //        throw cms::Exception("LogicError") << "Track index has already been set for seed " << seedIndex << " to " << see_trkIdx[seedIndex] << "; was trying to set it to " << iTrack;
+      //      }
       see_trkIdx[seedIndex] = iTrack;
     }
-    trk_vtxIdx   .push_back(-1); // to be set correctly in fillVertices
+    trk_vtxx   .push_back(itTrack->referencePoint().x()); // to be set correctly in fillVertices
+    trk_vtxy   .push_back(itTrack->referencePoint().y()); // to be set correctly in fillVertices
+    trk_vtxz   .push_back(itTrack->referencePoint().z()); // to be set correctly in fillVertices
     trk_simTrkIdx.push_back(tpIdx);
     LogTrace("TrackingNtuple") << "Track #" << itTrack.key() << " with q=" << charge
                                << ", pT=" << pt << " GeV, eta: " << eta << ", phi: " << phi
@@ -2533,6 +2945,7 @@ void TrackingNtuple::fillVertices(const reco::VertexCollection& vertices,
     vtx_fake.push_back(vertex.isFake());
     vtx_valid.push_back(vertex.isValid());
 
+    /*
     std::vector<int> trkIdx;
     for(auto iTrack = vertex.tracks_begin(); iTrack != vertex.tracks_end(); ++iTrack) {
       // Ignore link if vertex was fit from a track collection different from the input
@@ -2540,14 +2953,44 @@ void TrackingNtuple::fillVertices(const reco::VertexCollection& vertices,
         continue;
 
       trkIdx.push_back(iTrack->key());
-
-      if(trk_vtxIdx[iTrack->key()] != -1) {
-        throw cms::Exception("LogicError") << "Vertex index has already been set for track " << iTrack->key() << " to " << trk_vtxIdx[iTrack->key()] << "; was trying to set it to " << iVertex;
-      }
-      trk_vtxIdx[iTrack->key()] = iVertex;
+    
+      //      if(trk_vtxIdx[iTrack->key()] != -1) {
+      //        throw cms::Exception("LogicError") << "Vertex index has already been set for track " << iTrack->key() << " to " << trk_vtxIdx[iTrack->key()] << "; was trying to set it to " << iVertex;
+      //      }
+      //      trk_vtxIdx[iTrack->key()] = iVertex;
     }
     vtx_trkIdx.push_back(trkIdx);
+    */
   }
+}
+
+void TrackingNtuple::fillGenParticles(const reco::GenParticleCollection& genParticles) {
+
+  MCTruthHelper<reco::GenParticle> mcTruthHelper;
+  
+  for (auto&& genParticle : genParticles) {
+
+    if (genParticle.charge() == 0) continue;
+    if (genParticle.status() != 1) continue;
+
+    gen_px.push_back(genParticle.momentum().x());
+    gen_py.push_back(genParticle.momentum().y());
+    gen_pz.push_back(genParticle.momentum().z());
+    gen_pdgId.push_back(genParticle.pdgId());
+    gen_charge.push_back(genParticle.charge());
+    gen_vx.push_back(genParticle.vertex().x());
+    gen_vy.push_back(genParticle.vertex().y());
+    gen_vz.push_back(genParticle.vertex().z());
+    gen_status.push_back(genParticle.status());
+
+
+    gen_mother.push_back((mcTruthHelper.uniqueMother(genParticle))->pdgId());
+    gen_isTauDecayProduct.push_back(mcTruthHelper.isTauDecayProduct(genParticle));
+    gen_isDirectHadronDecayProduct.push_back(mcTruthHelper.isDirectHadronDecayProduct(genParticle));
+    gen_isPrompt.push_back(mcTruthHelper.isPrompt(genParticle));
+    
+  }
+
 }
 
 void TrackingNtuple::fillTrackingVertices(const TrackingVertexRefVector& trackingVertices,
@@ -2594,24 +3037,182 @@ void TrackingNtuple::fillTrackingVertices(const TrackingVertexRefVector& trackin
   }
 }
 
+void TrackingNtuple::fillSuperClusters(const edm::Event& iEvent,
+				       const reco::SuperClusterCollection& scCollEB,
+				       const reco::SuperClusterCollection& scCollEE,
+				       const reco::BeamSpot& bs,
+				       const MagneticField *theMF,
+				       const TrackerTopology& tTopo) {
+
+  float mass=.000511; // electron propagation
+  PropagatorWithMaterial* prop1stLayer = new PropagatorWithMaterial(oppositeToMomentum,mass,&(*theMF));
+  PropagatorWithMaterial* prop2ndLayer = new PropagatorWithMaterial(alongMomentum,mass,&(*theMF));
+
+  std::vector<reco::SuperCluster> clusters_;
+  clusters_.reserve(scCollEB.size() + scCollEE.size());
+  clusters_.insert(clusters_.end(),scCollEB.begin(),scCollEB.end());
+  clusters_.insert(clusters_.end(),scCollEE.begin(),scCollEE.end());
+  for (auto&& theClus : clusters_) {
+    GlobalPoint xmeas(theClus.position().x(),theClus.position().y(),theClus.position().z());
+    GlobalPoint vprim(bs.position().x(),bs.position().y(),bs.position().z());
+    float energy = theClus.energy();
+          
+    scl_e.push_back(energy);
+    scl_px.push_back(energy*cos(theClus.position().phi())/cosh(theClus.position().eta()));
+    scl_py.push_back(energy*sin(theClus.position().phi())/cosh(theClus.position().eta()));
+    scl_pz.push_back(energy*tanh(theClus.position().eta()));
+    scl_x.push_back(bs.position().x());
+    scl_y.push_back(bs.position().y());
+    scl_z.push_back(bs.position().z());
+
+    std::vector<int>   scl_charge_;
+    std::vector<int>   scl_lay1_;
+    std::vector<int>   scl_lay2_;
+    std::vector<int>   scl_subDet1_;
+    std::vector<int>   scl_subDet2_;
+    std::vector<float> scl_dRz1_;
+    std::vector<float> scl_dPhi1_;
+    std::vector<float> scl_dRz2_;
+    std::vector<float> scl_dPhi2_;
+    std::vector<int>   scl_seedType_;
+    std::vector<unsigned char> scl_hitsMask_;
+
+    for (int charge=-1; charge<2; charge+=2) {
+
+      FreeTrajectoryState fts = FTSFromVertexToPointFactory::get(*theMF, xmeas, vprim, energy, charge);
+      PerpendicularBoundPlaneBuilder bpb;
+      TrajectoryStateOnSurface tsos(fts, *bpb(fts.position(), fts.momentum()));
+
+      int seedType = -1;
+      for(const auto& seedToken: seedTokensOriginal_) {
+	seedType++;
+	edm::Handle<edm::View<reco::Track> > seedTracksHandle;
+	iEvent.getByToken(seedToken, seedTracksHandle);
+	const auto& seedTracks = *seedTracksHandle;
+
+	for(const auto& seedTrack: seedTracks) {
+	  const auto& seedRef = seedTrack.seedRef();
+	  const auto& seed = *seedRef;
+	  
+	  const TrajectorySeed::range& hits = seed.recHits();
+	  for( auto it1 = hits.first; it1 < hits.second-1; ++it1 ) {
+	    if( !it1->isValid() ) continue;
+	    auto  idx1 = std::distance(hits.first,it1);
+	    const DetId id1 = it1->geographicalId();
+	    const GeomDet *geomdet1 = it1->det();	 
+	    const GlobalPoint& hit1Pos = it1->globalPosition();
+	    auto dt = hit1Pos.x()*xmeas.x()+hit1Pos.y()*xmeas.y();
+	    if (dt<0) continue;
+
+	    auto tsos1 = prop1stLayer->propagate(tsos,geomdet1->surface());
+	    if( !tsos1.isValid() ) continue;	  
+	    EleRelPointPair pp1(hit1Pos,tsos1.globalParameters().position(),vprim);
+	    const math::XYZPoint relHit1Pos(hit1Pos-vprim), relTSOSPos(tsos1.globalParameters().position() - vprim);
+	    const int subDet1 = id1.subdetId();
+	    const float dRz1 = ( id1.subdetId()%2 ? pp1.dZ() : pp1.dPerp() );
+	    const float dPhi1 = pp1.dPhi();
+	    if (std::abs(dRz1) > 0.5 || std::abs(dPhi1) > 0.5) continue;
+	    // we don't know the z vertex position, get it from linear extrapolation
+	    // compute the z vertex from the cluster point and the found pixel hit
+	    const double pxHit1z = hit1Pos.z();
+	    const double pxHit1x = hit1Pos.x();
+	    const double pxHit1y = hit1Pos.y();
+	    const double r1diff = std::sqrt( (pxHit1x-vprim.x())*(pxHit1x-vprim.x()) + 
+					     (pxHit1y-vprim.y())*(pxHit1y-vprim.y())   );
+	    const double r2diff = std::sqrt( (xmeas.x()-pxHit1x)*(xmeas.x()-pxHit1x) + 
+					     (xmeas.y()-pxHit1y)*(xmeas.y()-pxHit1y)   );
+	    double zVertex = pxHit1z - r1diff*(xmeas.z()-pxHit1z)/r2diff;		
+	    if (std::abs(zVertex) > 15.) continue;
+
+	    //store first hit
+	    scl_lay1_.push_back(tTopo.layer(id1));
+	    scl_subDet1_.push_back(subDet1);
+	    scl_dRz1_.push_back(dRz1);
+	    scl_dPhi1_.push_back(dPhi1);
+	    scl_seedType_.push_back(seedType);
+	    scl_charge_.push_back(charge);
+	    GlobalPoint vertex(vprim.x(),vprim.y(),zVertex);
+	    float min_dist = 99999999;
+	    float min_dRz2 = -999.;
+	    float min_dPhi2 = -999.;
+	    int min_subDet2 = -999;
+	    int min_lay2 = -999;
+	    unsigned char min_hitsMask = 0;
+	    for( auto it2 = it1+1; it2 != hits.second; ++it2 ) {
+
+	      if( !it2->isValid() ) continue;
+	      auto idx2 = std::distance(hits.first,it2);
+	      const DetId id2 = it2->geographicalId();
+	      const GeomDet *geomdet2 = it2->det();
+
+	      FreeTrajectoryState fts2 = FTSFromVertexToPointFactory::get(*theMF, hit1Pos, vertex, energy, charge) ;
+	      const GlobalPoint& hit2Pos = it2->globalPosition();;
+	      auto tsos2 = prop2ndLayer->propagate(fts2,geomdet2->surface());
+	      if ( !tsos2.isValid() ) continue;
+	      EleRelPointPair pp2(hit2Pos,tsos2.globalParameters().position(),vertex) ;
+	      const int subDet2 = id2.subdetId();
+	      const float dRz2 = (subDet2%2==1)?pp2.dZ():pp2.dPerp();
+	      const float dPhi2 = pp2.dPhi();
+	      if (std::hypot(dRz2,dPhi2) < min_dist) {
+		min_dist = std::hypot(dRz2, dPhi2);
+		min_dRz2 = dRz2;
+		min_dPhi2 = dPhi2;
+		min_subDet2 = subDet2;
+		min_lay2 = tTopo.layer(id2);
+		min_hitsMask = (1<<idx1)|(1<<idx2);
+	      }
+	    }
+	    scl_lay2_.push_back(min_lay2);
+	    scl_subDet2_.push_back(min_subDet2);
+	    scl_dRz2_.push_back(min_dRz2);
+	    scl_dPhi2_.push_back(min_dPhi2);
+	    scl_hitsMask_.push_back(min_hitsMask);
+	  }
+	}
+      }
+    }
+    scl_charge.push_back(scl_charge_);
+    scl_lay1.push_back(scl_lay1_);
+    scl_lay2.push_back(scl_lay2_);
+    scl_subDet1.push_back(scl_subDet1_);
+    scl_subDet2.push_back(scl_subDet2_);
+    scl_dRz1.push_back(scl_dRz1_);
+    scl_dPhi1.push_back(scl_dPhi1_);
+    scl_dRz2.push_back(scl_dRz2_);
+    scl_dPhi2.push_back(scl_dPhi2_);
+    scl_hitsMask.push_back(scl_hitsMask_);
+    scl_seedType.push_back(scl_seedType_);
+
+  }
+
+  if (prop1stLayer) delete prop1stLayer;
+  if (prop2ndLayer) delete prop2ndLayer;
+  
+}
+  
+
 // ------------ method fills 'descriptions' with the allowed parameters for the module  ------------
 void TrackingNtuple::fillDescriptions(edm::ConfigurationDescriptions& descriptions) {
   //The following says we do not know what parameters are allowed so do no validation
   // Please change this to state exactly what you do use, even if it is no parameters
   edm::ParameterSetDescription desc;
   desc.addUntracked<std::vector<edm::InputTag> >("seedTracks", std::vector<edm::InputTag>{
+      edm::InputTag("seedTrackselectronMergedSeeds"),
+  });
+  desc.addUntracked<std::vector<edm::InputTag> >("seedTracksOriginal", std::vector<edm::InputTag>{
       edm::InputTag("seedTracksinitialStepSeeds"),
-      edm::InputTag("seedTracksdetachedTripletStepSeeds"),
-      edm::InputTag("seedTrackspixelPairStepSeeds"),
-      edm::InputTag("seedTrackslowPtTripletStepSeeds"),
+      edm::InputTag("seedTrackshighPtTripletStepSeeds"),
       edm::InputTag("seedTracksmixedTripletStepSeeds"),
       edm::InputTag("seedTrackspixelLessStepSeeds"),
-      edm::InputTag("seedTrackstobTecStepSeeds"),
-      edm::InputTag("seedTracksjetCoreRegionalStepSeeds"),
-      edm::InputTag("seedTracksmuonSeededSeedsInOut"),
-      edm::InputTag("seedTracksmuonSeededSeedsOutIn")
+      edm::InputTag("seedTrackstripletElectronSeeds"),
+      edm::InputTag("seedTrackspixelPairElectronSeeds"),
+      edm::InputTag("seedTracksstripPairElectronSeeds")
   });
-  desc.addUntracked<edm::InputTag>("tracks", edm::InputTag("generalTracks"));
+  // Supercluster
+  desc.addUntracked<edm::InputTag>("barrelSuperClusters", edm::InputTag("particleFlowSuperClusterECAL:particleFlowSuperClusterECALBarrel"));
+  desc.addUntracked<edm::InputTag>("endcapSuperClusters", edm::InputTag("particleFlowSuperClusterECAL:particleFlowSuperClusterECALEndcapWithPreshower"));
+  desc.addUntracked<edm::InputTag>("tracks", edm::InputTag("electronGsfTracks"));
+  desc.addUntracked<edm::InputTag>("genParticles", edm::InputTag("genParticles"));
   desc.addUntracked<edm::InputTag>("trackingParticles", edm::InputTag("mix", "MergedTrackTruth"));
   desc.addUntracked<bool>("trackingParticlesRef", false);
   desc.addUntracked<edm::InputTag>("clusterTPMap", edm::InputTag("tpClusterProducer"));

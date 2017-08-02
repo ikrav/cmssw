@@ -13,9 +13,10 @@ from Validation.RecoTrack.trackingNtuple_cfi import *
 from Validation.RecoTrack.TrackValidation_cff import *
 from SimGeneral.TrackingAnalysis.trackingParticleNumberOfLayersProducer_cff import *
 import Validation.RecoTrack.TrackValidation_cff as _TrackValidation_cff
+import RecoTracker.IterativeTracking.ElectronSeeds_cff as _electron_cff
 
-_includeHits = True
-#_includeHits = False
+#_includeHits = True
+_includeHits = False
 
 _includeSeeds = True
 #_includeSeeds = False
@@ -53,11 +54,15 @@ def _filterForNtuple(lst):
             continue
         ret.append(item)
     return ret
-_seedProducers = _filterForNtuple(_TrackValidation_cff._seedProducers)
+# The line below is commented out because it is replaced by the electron-specific line below
+# _seedProducers = _filterForNtuple(_TrackValidation_cff._seedProducers)
+
 _seedProducers_trackingPhase1 = _filterForNtuple(_TrackValidation_cff._seedProducers_trackingPhase1)
 _seedProducers_trackingPhase1QuadProp = _filterForNtuple(_TrackValidation_cff._seedProducers_trackingPhase1QuadProp)
 _seedProducers_trackingPhase2PU140  = _filterForNtuple(_TrackValidation_cff._seedProducers_trackingPhase2PU140)
 
+# Build seed tracks from the GSF tracks seeds
+_seedProducers = ['electronMergedSeeds']
 (_seedSelectors, trackingNtupleSeedSelectors) = _TrackValidation_cff._addSeedToTrackProducers(_seedProducers, globals())
 (_seedSelectors_trackingPhase1, _trackingNtupleSeedSelectors_trackingPhase1) = _TrackValidation_cff._addSeedToTrackProducers(_seedProducers_trackingPhase1, globals())
 (_seedSelectors_trackingPhase1QuadProp, _trackingNtupleSeedSelectors_trackingPhase1QuadProp) = _TrackValidation_cff._addSeedToTrackProducers(_seedProducers_trackingPhase1QuadProp, globals())
@@ -73,8 +78,22 @@ trackingNtuple.seedTracks = _seedSelectors
 trackingPhase1.toModify(trackingNtuple, seedTracks = _seedSelectors_trackingPhase1)
 trackingPhase1QuadProp.toModify(trackingNtuple, seedTracks = _seedSelectors_trackingPhase1)
 trackingPhase2PU140.toModify(trackingNtuple, seedTracks = _seedSelectors_trackingPhase2PU140)
+trackingNtuple.tracks = cms.untracked.InputTag('electronGsfTracks')
 
+# Matches to the original seeds defined in RecoTracker.IterativeTracking.ElectronSeeds_cff
+_seedProducersOriginal = ['initialStepSeeds',
+                          'highPtTripletStepSeeds',
+                          'mixedTripletStepSeeds',
+                          'pixelLessStepSeeds',
+                          'tripletElectronSeeds',
+                          'pixelPairElectronSeeds',
+                          'stripPairElectronSeeds']
+(_seedSelectorsOriginal, trackingNtupleSeedSelectorsOriginal) = _TrackValidation_cff._addSeedToTrackProducers(_seedProducersOriginal, globals())
+trackingNtuple.seedTracksOriginal = _seedSelectorsOriginal
+trackingNtuple.barrelSuperClusters = cms.untracked.InputTag("particleFlowSuperClusterECAL:particleFlowSuperClusterECALBarrel")
+trackingNtuple.endcapSuperClusters = cms.untracked.InputTag("particleFlowSuperClusterECAL:particleFlowSuperClusterECALEndcapWithPreshower")
 trackingNtupleSequence = cms.Sequence()
+
 # reproduce hits because they're not stored in RECO
 if _includeHits:
     trackingNtupleSequence += (
@@ -88,6 +107,9 @@ if _includeHits:
 
 if _includeSeeds:
     trackingNtupleSequence += trackingNtupleSeedSelectors
+    trackingNtupleSequence += trackingNtupleSeedSelectorsOriginal
+
+print 'Configuration for Ntuple finished'
 
 trackingNtupleSequence += (
     # sim information
